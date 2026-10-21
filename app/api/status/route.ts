@@ -4,6 +4,7 @@ import { checkOllamaModelAvailability, getOllamaBaseUrl } from "@/lib/ollama";
 import type { AiStatusResponse } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 /**
  * GET /api/status — safe server-side AI configuration diagnostics.
@@ -31,6 +32,7 @@ export async function GET(): Promise<NextResponse<AiStatusResponse>> {
       ollamaBaseUrl: baseUrl,
       ollamaReachable: availability.available,
       modelInstalled: availability.available,
+      modelName: availability.modelName,
       modelError: availability.error,
     };
 

@@ -3,6 +3,7 @@ import { AiRequestError, getAiConfig, getAiRuntimeStatus, runVisionDiagnosis } f
 import type { AiStatusResponse, AnalyzeResult } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // matches client-side limit
 const ALLOWED_MIME = new Set(["image/png", "image/jpeg"]);
@@ -82,6 +83,9 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeResult
       const status = error.kind === "rate_limited" ? 429 : 502;
       return NextResponse.json({ status: "error", message: error.message }, { status });
     }
+    const detail = error instanceof Error ? error.message : String(error);
+    // Safe diagnostic log — never includes API keys.
+    console.error("[/api/analyze] unexpected error:", detail);
     return NextResponse.json(
       { status: "error", message: "AI analysis failed unexpectedly. Please try again." },
       { status: 500 },

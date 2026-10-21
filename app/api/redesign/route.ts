@@ -4,6 +4,7 @@ import { runRedesignGeneration } from "@/lib/redesign";
 import type { AnalysisFinding, RedesignResult } from "@/lib/types";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_MIME = new Set(["image/png", "image/jpeg"]);
@@ -85,6 +86,8 @@ export async function POST(req: NextRequest): Promise<NextResponse<RedesignResul
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Redesign generation failed.";
+    // Safe diagnostic log — never includes API keys.
+    console.error("[/api/redesign] unexpected error:", message);
     return NextResponse.json({ status: "error", message }, { status: 502 });
   }
 }

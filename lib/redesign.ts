@@ -85,6 +85,7 @@ export async function runRedesignGeneration(
         userPrompt: buildUserPrompt(options),
         imageBase64: imageMatch[1],
         numPredict: 2_500,
+        jsonMode: true,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

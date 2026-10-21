@@ -6,6 +6,7 @@
  * images. No mock findings are ever returned.
  */
 
+import { randomUUID } from "node:crypto";
 import { callOllamaChat, getOllamaBaseUrl } from "@/lib/ollama";
 import { extractJsonContent } from "@/lib/jsonExtraction";
 import {
@@ -166,6 +167,7 @@ export async function runVisionDiagnosis(
         userPrompt: "Diagnose the interface problems in this screenshot.",
         imageBase64: imageMatch[1],
         numPredict: 1_500,
+        jsonMode: true,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -261,18 +263,29 @@ function classifyOllamaError(message: string): AiRequestError["kind"] {
   if (
     lower.includes("could not reach") ||
     lower.includes("fetch failed") ||
-    lower.includes("connect")
+    lower.includes("connect") ||
+    lower.includes("econnrefused") ||
+    lower.includes("socket") ||
+    lower.includes("abort")
   ) {
     return "network";
   }
   if (
     lower.includes("not installed") ||
     lower.includes("not found") ||
-    lower.includes("not supported")
+    lower.includes("not supported") ||
+    lower.includes("model") ||
+    lower.includes("/api/tags")
   ) {
     return "provider_error";
   }
-  if (lower.includes("json") || lower.includes("empty response")) {
+  if (
+    lower.includes("json") ||
+    lower.includes("empty response") ||
+    lower.includes("findings") ||
+    lower.includes("html") ||
+    lower.includes("css")
+  ) {
     return "invalid_response";
   }
   return "provider_error";
@@ -324,7 +337,7 @@ function parseFindings(content: string): AnalysisFinding[] {
     const region = parseRegion(f.region);
 
     findings.push({
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       title: f.title,
       severity: VALID_SEVERITIES.includes(f.severity as Severity)
         ? (f.severity as Severity)

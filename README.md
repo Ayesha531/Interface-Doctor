@@ -34,6 +34,9 @@ npm run build       # production build
 ## AI configuration
 
 The Analyze Interface button posts the screenshot to `/api/analyze` (server-side).
+The Generate Redesign button posts to `/api/redesign`. Both routes run on the server,
+so API keys and Ollama URLs never reach the browser.
+
 The provider is configurable via environment variables (see `.env.example`):
 
 | Variable | Purpose |
@@ -68,6 +71,53 @@ curl http://localhost:3000/api/status
 
 The response reports configuration, Ollama reachability, and model availability;
 the secret value is never returned.
+
+### Ollama setup in GitHub Codespaces
+
+1. Install Ollama in the Codespace if it is not already present:
+   ```bash
+   curl -fsSL https://ollama.com/install.sh | sh
+   ```
+2. Start the Ollama service in the background:
+   ```bash
+   ollama serve &
+   ```
+3. Pull a vision-capable model. The default is `gemma3`, but any Ollama model
+   that supports images works (e.g. `llava`, `llama3.2-vision`):
+   ```bash
+   ollama pull gemma3
+   ```
+4. Verify the model is installed and Ollama is reachable from the same container:
+   ```bash
+   curl http://localhost:11434/api/tags
+   ```
+5. Add the environment variables in the workspace **Secrets** panel (or create a
+   local `.env` file from `.env.example`):
+   ```bash
+   AI_PROVIDER=ollama
+   OLLAMA_BASE_URL=http://localhost:11434
+   AI_VISION_MODEL=gemma3
+   ```
+6. **Restart the Next.js dev server** (`npm run dev`) after changing secrets so
+   the server reads the new values.
+
+`localhost:11434` refers to the Codespace/container environment, not your personal
+computer, because both Ollama and the dev server run inside the same Codespace.
+
+### Troubleshooting Ollama
+
+If analysis or redesign fails with an Ollama error:
+
+1. Check the server-side status badge or call `curl http://localhost:3000/api/status`.
+   It reports whether the provider is configured, Ollama is reachable, and the model is installed.
+2. Verify the exact model name Ollama knows about:
+   ```bash
+   curl http://localhost:11434/api/tags | jq '.models[].name'
+   ```
+   The server uses the exact installed name (e.g. `gemma3:latest`) in `/api/chat` requests.
+3. Make sure the model supports image inputs. The default `gemma3` is multimodal; plain text
+   models will fail when a screenshot is supplied.
+4. Restart the Next.js dev server after changing environment variables.
 
 **If no AI service is reachable**, the upload/preview workflow still works end-to-end and the UI
 clearly explains the issue — no fake findings or redesigns are ever shown. Rate limits, network

@@ -7,8 +7,8 @@
 import { extractJsonContent } from "@/lib/jsonExtraction";
 
 export const OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434";
-export const OLLAMA_REQUEST_TIMEOUT_MS = 120_000;
-export const OLLAMA_HEALTH_TIMEOUT_MS = 5_000;
+export const OLLAMA_REQUEST_TIMEOUT_MS = 180_000;
+export const OLLAMA_HEALTH_TIMEOUT_MS = 8_000;
 
 export function getOllamaBaseUrl(): string {
   return (process.env.OLLAMA_BASE_URL || OLLAMA_DEFAULT_BASE_URL).replace(
@@ -19,7 +19,18 @@ export function getOllamaBaseUrl(): string {
 
 export interface OllamaAvailabilityResult {
   available: boolean;
+  /** Exact installed model name to use in /api/chat (e.g. "gemma3:latest"). */
+  modelName?: string;
   error?: string;
+}
+
+interface OllamaTagEntry {
+  name: string;
+  model?: string;
+}
+
+interface OllamaTagsResponse {
+  models?: OllamaTagEntry[];
 }
 
 /**
@@ -27,6 +38,9 @@ export interface OllamaAvailabilityResult {
  *
  * Ollama returns a 200 with a list of local models from /api/tags. A model
  * matches if its name equals the configured name or starts with "name:".
+ * When a match is found, the exact installed name is returned so callers can
+ * use it in subsequent /api/chat requests — some Ollama versions are strict
+ * about model aliases and return 500 when the alias cannot be resolved.
  */
 export async function checkOllamaModelAvailability(
   baseUrl: string,
@@ -55,9 +69,9 @@ export async function checkOllamaModelAvailability(
     };
   }
 
-  let data: { models?: Array<{ name: string }> };
+  let data: OllamaTagsResponse;
   try {
-    data = (await response.json()) as { models?: Array<{ name: string }> };
+    data = (await response.json()) as OllamaTagsResponse;
   } catch {
     return {
       available: false,
@@ -65,25 +79,31 @@ export async function checkOllamaModelAvailability(
     };
   }
 
-  const installed = data.models?.map((m) => m.name) ?? [];
-  const target = model.toLowerCase();
+  const installed = data.models ?? [];
+  const target = model.toLowerCase().trim();
 
-  const installedMatch = installed.find((name) => {
-    const lower = name.toLowerCase();
-    return lower === target || lower.startsWith(`${target}:`);
+  const installedMatch = installed.find((entry) => {
+    const name = (entry.name || entry.model || "").toLowerCase();
+    return name === target || name.startsWith(`${target}:`);
   });
 
   if (!installedMatch) {
+    const names = installed
+      .map((entry) => entry.name || entry.model || "unknown")
+      .filter(Boolean);
     return {
       available: false,
       error:
         `Model '${model}' is not installed in Ollama. ` +
-        `Installed models: ${installed.length > 0 ? installed.join(", ") : "none"}. ` +
+        `Installed models: ${names.length > 0 ? names.join(", ") : "none"}. ` +
         `Run 'ollama pull ${model}' and restart the dev server if needed.`,
     };
   }
 
-  return { available: true };
+  return {
+    available: true,
+    modelName: installedMatch.name || installedMatch.model || model,
+  };
 }
 
 export async function parseOllamaErrorText(response: Response): Promise<string> {
@@ -117,6 +137,21 @@ export interface OllamaChatOptions {
   userPrompt: string;
   imageBase64: string;
   numPredict?: number;
+  /** When true, ask Ollama to enforce JSON output (requires model support). */
+  jsonMode?: boolean;
+}
+
+function createRequestTimeoutSignal(ms: number): AbortSignal {
+  if (typeof AbortSignal !== "undefined" && "timeout" in AbortSignal) {
+    return AbortSignal.timeout(ms);
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  // Ensure the timer is cleaned up if the request finishes before the timeout.
+  if (typeof timer === "object" && "unref" in timer) {
+    (timer as NodeJS.Timeout).unref();
+  }
+  return controller.signal;
 }
 
 export async function callOllamaChat(
@@ -125,8 +160,35 @@ export async function callOllamaChat(
   options: OllamaChatOptions,
 ): Promise<string> {
   const availability = await checkOllamaModelAvailability(baseUrl, model);
-  if (!availability.available) {
-    throw new Error(availability.error);
+  if (!availability.available || !availability.modelName) {
+    throw new Error(availability.error ?? `Model '${model}' is not available.`);
+  }
+
+  const exactModel = availability.modelName;
+  const imageBase64 = options.imageBase64.replace(/\s/g, "");
+
+  // Use a system message in the messages array rather than the top-level
+  // `system` field. This matches the canonical Ollama /api/chat shape and
+  // avoids strict-version failures some Ollama builds show when both are
+  // present or when `system` is passed at the top level for vision models.
+  const requestBody: Record<string, unknown> = {
+    model: exactModel,
+    stream: false,
+    messages: [
+      { role: "system", content: options.systemPrompt },
+      {
+        role: "user",
+        content: options.userPrompt,
+        images: [imageBase64],
+      },
+    ],
+    options: {
+      num_predict: options.numPredict ?? 1_500,
+    },
+  };
+
+  if (options.jsonMode) {
+    requestBody.format = "json";
   }
 
   let response: Response;
@@ -134,22 +196,8 @@ export async function callOllamaChat(
     response = await fetch(`${baseUrl}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      signal: AbortSignal.timeout(OLLAMA_REQUEST_TIMEOUT_MS),
-      body: JSON.stringify({
-        model,
-        stream: false,
-        options: {
-          num_predict: options.numPredict ?? 1_500,
-        },
-        messages: [
-          { role: "system", content: options.systemPrompt },
-          {
-            role: "user",
-            content: options.userPrompt,
-            images: [options.imageBase64],
-          },
-        ],
-      }),
+      signal: createRequestTimeoutSignal(OLLAMA_REQUEST_TIMEOUT_MS),
+      body: JSON.stringify(requestBody),
     });
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
@@ -161,14 +209,16 @@ export async function callOllamaChat(
 
   if (!response.ok) {
     const detail = await parseOllamaErrorText(response);
-    throw new Error(`Ollama returned HTTP ${response.status}: ${detail}`);
+    throw new Error(
+      `Ollama returned HTTP ${response.status} for model '${exactModel}': ${detail}`,
+    );
   }
 
-  const payload = (await response.json()) as {
+  const result = (await response.json()) as {
     message?: { content?: string };
   };
 
-  const rawContent = payload.message?.content;
+  const rawContent = result.message?.content;
   if (!rawContent) {
     throw new Error("Ollama returned an empty response message.");
   }

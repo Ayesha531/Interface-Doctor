@@ -118,6 +118,8 @@ export interface AiStatusResponse {
     ollamaReachable?: boolean;
     /** Whether the configured model appears in the list of installed Ollama models. */
     modelInstalled?: boolean;
+    /** The exact installed model name the server will use in /api/chat (no secrets). */
+    modelName?: string;
     /** A safe error hint when Ollama is unreachable or the model is missing. */
     modelError?: string;
   };
