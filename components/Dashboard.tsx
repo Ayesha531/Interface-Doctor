@@ -15,7 +15,12 @@ import {
   removeRecentProject,
   type RecentProject,
 } from "@/lib/recentProjects";
-import type { AiStatusResponse, AnalyzeResult, ScreenshotSelection } from "@/lib/types";
+import type {
+  AiStatusResponse,
+  AnalysisFinding,
+  AnalyzeResult,
+  ScreenshotSelection,
+} from "@/lib/types";
 
 export function Dashboard() {
   const [selection, setSelection] = useState<ScreenshotSelection | null>(null);
@@ -23,6 +28,7 @@ export function Dashboard() {
   const [sampleLoading, setSampleLoading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalyzeResult | null>(null);
+  const [activeFindingId, setActiveFindingId] = useState<string | null>(null);
   const [aiStatus, setAiStatus] = useState<AiStatusResponse | null>(null);
   const [projects, setProjects] = useState<RecentProject[]>([]);
 
@@ -51,6 +57,7 @@ export function Dashboard() {
     (sel: ScreenshotSelection) => {
       setSelection(sel);
       setResult(null);
+      setActiveFindingId(null);
       setUploadError(null);
       void registerProject(sel);
     },
@@ -92,6 +99,12 @@ export function Dashboard() {
       });
       const data = (await res.json()) as AnalyzeResult;
       setResult(data);
+      if (data.status === "ok" && data.findings.length > 0) {
+        const firstWithRegion = data.findings.find((f: AnalysisFinding) => f.region);
+        setActiveFindingId(firstWithRegion?.id ?? data.findings[0].id);
+      } else {
+        setActiveFindingId(null);
+      }
     } catch {
       setResult({
         status: "error",
@@ -105,6 +118,7 @@ export function Dashboard() {
   const clearSelection = useCallback(() => {
     setSelection(null);
     setResult(null);
+    setActiveFindingId(null);
     setUploadError(null);
   }, []);
 
@@ -161,6 +175,9 @@ export function Dashboard() {
               {selection ? (
                 <ScreenshotPreview
                   selection={selection}
+                  findings={result?.status === "ok" ? result.findings : []}
+                  activeFindingId={activeFindingId}
+                  onActivateFinding={setActiveFindingId}
                   analyzing={analyzing}
                   onAnalyze={() => void handleAnalyze()}
                   onRemove={clearSelection}
@@ -181,7 +198,12 @@ export function Dashboard() {
               </p>
             )}
 
-            <AnalysisResultPanel loading={analyzing} result={result} />
+            <AnalysisResultPanel
+              loading={analyzing}
+              result={result}
+              activeFindingId={activeFindingId}
+              onActivateFinding={setActiveFindingId}
+            />
           </section>
 
           {/* How it works */}

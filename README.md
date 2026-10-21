@@ -3,10 +3,11 @@
 **by Team DebugMD** — an AI-powered interface improvement tool. Upload a screenshot of a
 website or app, and get an honest AI diagnosis of design problems with suggested fixes.
 
-This repository currently contains **Phase 1**: the greenfield app scaffold with the branded
-dashboard, validated drag-and-drop screenshot upload (plus a sample option), recent projects,
-and the Analyze Interface flow that honestly reports when AI services are not configured
-instead of fabricating findings.
+This repository currently contains **Phase 2**: real AI-powered vision diagnosis with
+prioritized findings (including critical/high/medium/low severity), category filters,
+confidence levels, and clickable screenshot issue markers that highlight the corresponding
+finding card. Phase 1's branded dashboard, validated drag-and-drop screenshot upload (plus a
+sample option), recent projects, and honest AI-status reporting are preserved and extended.
 
 ## Stack
 
@@ -61,25 +62,26 @@ app/
   globals.css           Tailwind layers + focus styles
   api/analyze/route.ts  GET: AI config status · POST: validate + diagnose
 components/
-  Dashboard.tsx         Client-side state orchestration
+  Dashboard.tsx              Client-side state orchestration
   Sidebar.tsx, Logo.tsx, AiStatusBadge.tsx
-  UploadDropzone.tsx    Drag-and-drop + file picker with validation
-  ScreenshotPreview.tsx Preview, remove/replace, Analyze button
-  AnalysisResultPanel.tsx Loading / unconfigured / error / findings states
-  RecentProjects.tsx    localStorage-backed recent projects grid
+  UploadDropzone.tsx         Drag-and-drop + file picker with validation
+  ScreenshotPreview.tsx      Preview, remove/replace, Analyze button
+  ScreenshotAnnotator.tsx    Issue markers overlaid on the screenshot
+  AnalysisResultPanel.tsx    Loading / unconfigured / error / findings + filters
+  RecentProjects.tsx         localStorage-backed recent projects grid
 lib/
-  types.ts              Shared API/domain types
-  ai.ts                 Server-side provider config + validated vision call
-  uploadValidation.ts   PNG/JPG + 10 MB validation, byte formatting
-  imageUtils.ts         File→preview, sample rasterization, thumbnails
-  recentProjects.ts     localStorage store
+  types.ts                   Shared API/domain types (findings, categories, regions)
+  ai.ts                      Server-side provider config + validated vision call
+  geometry.ts                Map fractional regions to rendered screenshot pixels
+  uploadValidation.ts        PNG/JPG + 10 MB validation, byte formatting
+  imageUtils.ts              File→preview, sample rasterization, thumbnails
+  recentProjects.ts          localStorage store
 public/
   sample-screenshot.svg Bundled sample UI screenshot (rasterized to PNG on use)
 ```
 
 ## What is intentionally not here yet (later phases)
 
-- Issue markers drawn over the screenshot (Phase 2 returns `region` data ready for this)
-- AI-generated redesign and before/after comparison (Phases 2–3)
+- AI-generated redesign and before/after comparison (Phase 3)
 - Measurable verification checks (Phase 4)
 - Server-side project persistence (Phase 5)

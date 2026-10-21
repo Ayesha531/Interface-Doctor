@@ -1,10 +1,14 @@
 "use client";
 
-import type { ScreenshotSelection } from "@/lib/types";
+import type { AnalysisFinding, ScreenshotSelection } from "@/lib/types";
 import { formatBytes } from "@/lib/uploadValidation";
+import { ScreenshotAnnotator } from "@/components/ScreenshotAnnotator";
 
 interface ScreenshotPreviewProps {
   selection: ScreenshotSelection;
+  findings: AnalysisFinding[];
+  activeFindingId?: string | null;
+  onActivateFinding?: (id: string | null) => void;
   onRemove: () => void;
   onReplace: () => void;
   onAnalyze: () => void;
@@ -13,21 +17,36 @@ interface ScreenshotPreviewProps {
 
 export function ScreenshotPreview({
   selection,
+  findings,
+  activeFindingId,
+  onActivateFinding,
   onRemove,
   onReplace,
   onAnalyze,
   analyzing,
 }: ScreenshotPreviewProps) {
+  const hasFindings = findings.length > 0;
+
   return (
     <div className="animate-fade-in">
-      <div className="overflow-hidden rounded-xl border border-ink-200 bg-ink-950">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+      {hasFindings ? (
+        <ScreenshotAnnotator
           src={selection.previewUrl}
-          alt={`Preview of ${selection.name}`}
-          className="mx-auto max-h-[420px] w-full object-contain"
+          alt={`Annotated preview of ${selection.name}`}
+          findings={findings}
+          activeFindingId={activeFindingId}
+          onActivateFinding={onActivateFinding}
         />
-      </div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-ink-200 bg-ink-950">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={selection.previewUrl}
+            alt={`Preview of ${selection.name}`}
+            className="mx-auto max-h-[420px] w-full object-contain"
+          />
+        </div>
+      )}
 
       <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-600">
         <span className="max-w-[240px] truncate font-medium text-ink-800" title={selection.name}>
