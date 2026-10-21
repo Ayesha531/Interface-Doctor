@@ -1,6 +1,41 @@
 /** Shared types for the Interface Doctor AI client and API. */
 
-export type Severity = "low" | "medium" | "high";
+export type Severity = "critical" | "high" | "medium" | "low";
+
+export type FindingCategory =
+  | "visual-hierarchy"
+  | "spacing-alignment"
+  | "typography-readability"
+  | "color-contrast"
+  | "accessibility"
+  | "component-consistency"
+  | "navigation-usability"
+  | "responsive-design"
+  | "other";
+
+export const FINDING_CATEGORIES: readonly FindingCategory[] = [
+  "visual-hierarchy",
+  "spacing-alignment",
+  "typography-readability",
+  "color-contrast",
+  "accessibility",
+  "component-consistency",
+  "navigation-usability",
+  "responsive-design",
+  "other",
+];
+
+export const CATEGORY_LABELS: Record<FindingCategory, string> = {
+  "visual-hierarchy": "Visual hierarchy",
+  "spacing-alignment": "Spacing & alignment",
+  "typography-readability": "Typography & readability",
+  "color-contrast": "Color & contrast",
+  accessibility: "Accessibility",
+  "component-consistency": "Component consistency",
+  "navigation-usability": "Navigation & usability",
+  "responsive-design": "Responsive design",
+  other: "Other",
+};
 
 export interface FindingRegion {
   /** All values are fractions (0–1) of the screenshot's width/height. */
@@ -14,8 +49,10 @@ export interface AnalysisFinding {
   id: string;
   title: string;
   severity: Severity;
+  category: FindingCategory;
   explanation: string;
   suggestion: string;
+  confidence?: number;
   region?: FindingRegion;
 }
 
@@ -36,11 +73,41 @@ export type AnalyzeResult =
       message: string;
     };
 
+export interface RedesignPayload {
+  /** Standalone HTML body content for the improved interface preview. */
+  html: string;
+  /** CSS that styles the redesign. Kept separate for validation and CSP. */
+  css: string;
+  /** Short human-readable summary of the redesign direction. */
+  description: string;
+  /** List of concrete improvements the redesign makes over the original. */
+  improvements: string[];
+}
+
+export type RedesignResult =
+  | { status: "ok"; redesign: RedesignPayload; provider: string; model: string }
+  | { status: "ai_unconfigured"; message: string; missing: string[] }
+  | { status: "error"; message: string };
+
+export type AiSupportStatus = "ready" | "key_missing" | "provider_unsupported";
+
 export interface AiStatusResponse {
   configured: boolean;
   provider: string;
   model: string;
+  /** True when OPENAI_API_KEY (or the provider-specific key) is present in the server environment. */
+  keyPresent: boolean;
+  /** True when the configured provider is implemented by the application. */
+  supportedProvider: boolean;
+  status: AiSupportStatus;
   missing: string[];
+  /** Human-readable, safe explanation of the current AI configuration state. */
+  message: string;
+  /** Safe runtime diagnostics — never includes the secret value. */
+  diagnostics: {
+    runtime: "nodejs";
+    variablesChecked: string[];
+  };
 }
 
 export interface ScreenshotSelection {

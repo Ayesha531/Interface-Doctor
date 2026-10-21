@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { AiRequestError, getAiConfig, runVisionDiagnosis } from "@/lib/ai";
+import { AiRequestError, getAiConfig, getAiRuntimeStatus, runVisionDiagnosis } from "@/lib/ai";
 import type { AiStatusResponse, AnalyzeResult } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -9,12 +9,11 @@ const ALLOWED_MIME = new Set(["image/png", "image/jpeg"]);
 
 /** GET /api/analyze — report whether a vision AI provider is configured. */
 export async function GET(): Promise<NextResponse<AiStatusResponse>> {
-  const config = getAiConfig();
-  return NextResponse.json({
-    configured: config.configured,
-    provider: config.provider,
-    model: config.model,
-    missing: config.missing,
+  const status = getAiRuntimeStatus();
+  return NextResponse.json(status, {
+    headers: {
+      "Cache-Control": "no-store, max-age=0",
+    },
   });
 }
 
@@ -53,20 +52,22 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeResult
     );
   }
 
-  const config = getAiConfig();
-  if (!config.configured) {
+  const runtimeStatus = getAiRuntimeStatus();
+  if (!runtimeStatus.configured) {
     return NextResponse.json(
       {
         status: "ai_unconfigured",
         message:
-          "Your screenshot is ready, but AI diagnosis is not configured yet. " +
-          "Add an OPENAI_API_KEY in the workspace Secrets panel and retry — " +
-          "no findings are shown because none were generated.",
-        missing: config.missing,
+          "Your screenshot is ready, but AI diagnosis cannot run: " +
+          runtimeStatus.message +
+          " No findings are shown because none were generated.",
+        missing: runtimeStatus.missing,
       },
       { status: 200 },
     );
   }
+
+  const config = getAiConfig();
 
   try {
     const findings = await runVisionDiagnosis(image, config);

@@ -1,13 +1,20 @@
 /**
  * Server-side AI provider configuration and vision diagnosis call.
  *
- * Phase 1 scope: honestly report configuration status and, when credentials
- * exist, perform a genuine OpenAI vision request with validated output.
- * The provider is selected via AI_PROVIDER so alternatives can be added
- * without touching client code.
+ * Phase 2 scope: a stronger structured prompt that asks for category,
+ * confidence, and screenshot regions; validated parsing; and findings sorted
+ * by severity. The provider is selected via AI_PROVIDER so alternatives can
+ * be added without touching client code.
  */
 
-import type { AnalysisFinding, Severity } from "@/lib/types";
+import {
+  CATEGORY_LABELS,
+  FINDING_CATEGORIES,
+  type AiStatusResponse,
+  type AnalysisFinding,
+  type FindingCategory,
+  type Severity,
+} from "@/lib/types";
 
 export interface AiConfig {
   configured: boolean;
@@ -17,17 +24,73 @@ export interface AiConfig {
   apiKey?: string;
 }
 
-export function getAiConfig(): AiConfig {
+export function getAiRuntimeStatus(): AiStatusResponse {
   const provider = (process.env.AI_PROVIDER || "openai").trim() || "openai";
   const model = (process.env.AI_VISION_MODEL || "gpt-4o-mini").trim() || "gpt-4o-mini";
   const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const keyPresent = Boolean(apiKey);
+  const supportedProvider = provider === "openai";
+
+  if (!keyPresent) {
+    return {
+      configured: false,
+      provider,
+      model,
+      keyPresent: false,
+      supportedProvider,
+      status: "key_missing",
+      missing: ["OPENAI_API_KEY"],
+      message:
+        "OPENAI_API_KEY was not found in the server environment. " +
+        "If you already added it in the workspace Secrets panel, restart the dev server so the secret reaches the runtime.",
+      diagnostics: {
+        runtime: "nodejs",
+        variablesChecked: ["OPENAI_API_KEY", "AI_PROVIDER", "AI_VISION_MODEL"],
+      },
+    };
+  }
+
+  if (!supportedProvider) {
+    return {
+      configured: false,
+      provider,
+      model,
+      keyPresent: true,
+      supportedProvider: false,
+      status: "provider_unsupported",
+      missing: ["AI_PROVIDER"],
+      message: `An API key is present, but the provider '${provider}' is not supported. Set AI_PROVIDER=openai.`,
+      diagnostics: {
+        runtime: "nodejs",
+        variablesChecked: ["OPENAI_API_KEY", "AI_PROVIDER", "AI_VISION_MODEL"],
+      },
+    };
+  }
 
   return {
-    configured: provider === "openai" ? Boolean(apiKey) : false,
+    configured: true,
     provider,
     model,
-    missing: apiKey ? [] : ["OPENAI_API_KEY"],
-    apiKey,
+    keyPresent: true,
+    supportedProvider: true,
+    status: "ready",
+    missing: [],
+    message: "AI engine ready.",
+    diagnostics: {
+      runtime: "nodejs",
+      variablesChecked: ["OPENAI_API_KEY", "AI_PROVIDER", "AI_VISION_MODEL"],
+    },
+  };
+}
+
+export function getAiConfig(): AiConfig {
+  const runtime = getAiRuntimeStatus();
+  return {
+    configured: runtime.configured,
+    provider: runtime.provider,
+    model: runtime.model,
+    missing: runtime.missing,
+    apiKey: process.env.OPENAI_API_KEY?.trim(),
   };
 }
 
@@ -41,14 +104,23 @@ export class AiRequestError extends Error {
   }
 }
 
+const CATEGORY_PROMPT_LIST = FINDING_CATEGORIES.map(
+  (c) => `"${c}" — ${CATEGORY_LABELS[c]}`,
+).join("; ");
+
 const SYSTEM_PROMPT = [
   "You are Interface Doctor AI, a UI/UX design reviewer.",
-  "Examine the provided website or app screenshot and identify concrete interface problems.",
+  "Examine the provided website or app screenshot and identify concrete, visible interface problems.",
+  "Focus on: visual hierarchy, spacing and alignment, typography and readability, color contrast and accessibility,",
+  "component consistency, navigation and usability, and any obvious responsive-design concerns inferable from the screenshot.",
   "Respond with ONLY a JSON object of the shape:",
-  '{"findings":[{"title":string,"severity":"low"|"medium"|"high","explanation":string,"suggestion":string,',
-  '"region":{"x":number,"y":number,"width":number,"height":number}}]}.',
-  "Region values are fractions (0-1) of image width/height locating the problem area.",
-  "Report at most 6 findings, ordered by severity. Only report issues visible in the screenshot.",
+  '{"findings":[{"title":string,"severity":"critical"|"high"|"medium"|"low","category":"visual-hierarchy"|...,"explanation":string,',
+  '"suggestion":string,"confidence":number(0-1),"region":{"x":number,"y":number,"width":number,"height":number}}]}.',
+  `Available categories: ${CATEGORY_PROMPT_LIST}.`,
+  "Region values are fractions (0-1) of image width/height locating the problem area. Width and height must be positive.",
+  "Confidence is optional but should be a number between 0 and 1 when provided.",
+  "Report at most 6 findings, ordered by severity (critical first, then high, medium, low). Only report issues visible in the screenshot.",
+  "Do not invent measurements, accessibility test results, or numerical scores.",
 ].join(" ");
 
 export async function runVisionDiagnosis(
@@ -115,7 +187,7 @@ export async function runVisionDiagnosis(
   return parseFindings(content);
 }
 
-const VALID_SEVERITIES: readonly Severity[] = ["low", "medium", "high"];
+const VALID_SEVERITIES: readonly Severity[] = ["critical", "high", "medium", "low"];
 
 function parseFindings(content: string): AnalysisFinding[] {
   let parsed: unknown;
@@ -136,22 +208,48 @@ function parseFindings(content: string): AnalysisFinding[] {
     const f = item as Record<string, unknown>;
     if (typeof f.title !== "string" || typeof f.explanation !== "string") continue;
 
+    const category = parseCategory(f.category);
+    const confidence = parseConfidence(f.confidence);
+    const region = parseRegion(f.region);
+
     findings.push({
       id: crypto.randomUUID(),
       title: f.title,
       severity: VALID_SEVERITIES.includes(f.severity as Severity)
         ? (f.severity as Severity)
         : "medium",
+      category,
       explanation: f.explanation,
       suggestion: typeof f.suggestion === "string" ? f.suggestion : "",
-      region: parseRegion(f.region),
+      confidence,
+      region,
     });
   }
 
   if (findings.length === 0) {
     throw new AiRequestError("The AI response contained no usable findings.", "invalid_response");
   }
-  return findings;
+
+  const severityRank: Record<Severity, number> = {
+    critical: 0,
+    high: 1,
+    medium: 2,
+    low: 3,
+  };
+  return findings.sort((a, b) => severityRank[a.severity] - severityRank[b.severity]);
+}
+
+function parseCategory(value: unknown): FindingCategory {
+  if (typeof value !== "string") return "other";
+  return (FINDING_CATEGORIES as readonly string[]).includes(value)
+    ? (value as FindingCategory)
+    : "other";
+}
+
+function parseConfidence(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  if (value < 0 || value > 1) return undefined;
+  return value;
 }
 
 function parseRegion(value: unknown): AnalysisFinding["region"] {
