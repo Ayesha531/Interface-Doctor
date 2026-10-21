@@ -1,0 +1,167 @@
+/**
+ * Server-side AI-generated responsive redesign.
+ *
+ * Generates a static HTML + CSS preview of an improved interface. The output
+ * is sanitized to remove scripts and event handlers before it is returned to
+ * the client, and it is rendered inside a sandboxed iframe so arbitrary
+ * AI-generated JavaScript can never execute.
+ */
+
+import { getAiConfig, getAiRuntimeStatus } from "@/lib/ai";
+import type { AnalysisFinding, RedesignPayload } from "@/lib/types";
+
+export interface RedesignOptions {
+  imageDataUrl: string;
+  findings?: AnalysisFinding[];
+  originalWidth: number;
+  originalHeight: number;
+}
+
+const REDESIGN_SYSTEM_PROMPT = [
+  "You are Interface Doctor AI, a senior UI/UX designer and frontend developer.",
+  "Create a responsive webpage redesign inspired by the provided screenshot.",
+  "Respond with ONLY valid JSON matching this exact shape:",
+  '{"html":"string","css":"string","description":"string","improvements":["string",...]}',
+  "Rules:",
+  "- The 'html' value must be a single self-contained fragment (no <html>, <head>, or <body> tags).",
+  "- Use only semantic HTML and CSS. No JavaScript, no <script> tags, no inline event handlers (onclick, onload, etc.).",
+  "- The 'css' value must be plain CSS scoped to the redesign (e.g. wrap selectors in .idr-redesign).",
+  "- Make the layout responsive: use flexbox/grid and relative units so it works from 320px to 1200px.",
+  "- Preserve the original purpose/content where visible; improve hierarchy, spacing, typography, contrast, and consistency.",
+  "- The redesign should look like a polished, modern webpage mockup, not a long document.",
+  "- improvements should list 3-5 concrete improvements over the original screenshot.",
+  "- Do not invent measurements, accessibility test results, or numerical scores.",
+].join(" ");
+
+function buildUserPrompt(options: RedesignOptions): string {
+  const { findings, originalWidth, originalHeight } = options;
+  const base = `Design an improved version of the interface in the screenshot. The original dimensions are ${originalWidth}×${originalHeight}px.`;
+  if (!findings || findings.length === 0) return base;
+
+  const points = findings
+    .slice(0, 6)
+    .map((f) => `- ${f.title} (${f.severity}): ${f.suggestion || f.explanation}`)
+    .join("\n");
+
+  return `${base}\n\nAddress these diagnosed issues where applicable:\n${points}`;
+}
+
+export async function runRedesignGeneration(options: RedesignOptions): Promise<RedesignPayload> {
+  const runtimeStatus = getAiRuntimeStatus();
+  if (!runtimeStatus.configured) {
+    throw new Error("AI provider is not configured.");
+  }
+
+  const config = getAiConfig();
+  if (!config.apiKey) {
+    throw new Error("AI provider is not configured.");
+  }
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({
+      model: config.model,
+      max_tokens: 2000,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: REDESIGN_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: buildUserPrompt(options.findings) },
+            { type: "image_url", image_url: { url: options.imageDataUrl } },
+          ],
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`AI provider returned HTTP ${response.status}. ${body}`);
+  }
+
+  const payload = (await response.json()) as {
+    choices?: { message?: { content?: string } }[];
+  };
+  const content = payload.choices?.[0]?.message?.content;
+  if (!content) {
+    throw new Error("The AI provider returned an empty redesign response.");
+  }
+
+  const parsed = parseRedesignPayload(content);
+  return {
+    html: sanitizeHtml(parsed.html),
+    css: sanitizeCss(parsed.css),
+    description: sanitizeText(parsed.description),
+    improvements: sanitizeImprovements(parsed.improvements),
+  };
+}
+
+function parseRedesignPayload(content: string): RedesignPayload {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    throw new Error("The AI redesign response was not valid JSON.");
+  }
+
+  if (typeof parsed !== "object" || parsed === null) {
+    throw new Error("The AI redesign response was not a JSON object.");
+  }
+
+  const p = parsed as Record<string, unknown>;
+  if (typeof p.html !== "string" || typeof p.css !== "string") {
+    throw new Error("The AI redesign response is missing html or css.");
+  }
+
+  const improvements = Array.isArray(p.improvements)
+    ? p.improvements.filter((item): item is string => typeof item === "string")
+    : [];
+
+  return {
+    html: p.html,
+    css: p.css,
+    description: typeof p.description === "string" ? p.description : "",
+    improvements,
+  };
+}
+
+function sanitizeHtml(html: string): string {
+  return (
+    html
+      // Remove <script> elements and their contents.
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+      // Remove javascript: URLs.
+      .replace(/\s*javascript\s*:\s*/gi, "")
+      // Remove inline event handlers.
+      .replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|`[^`]*`|[^\s>]*)/gi, "")
+      // Remove meta refresh / CSP meta tags for safety.
+      .replace(/<meta\b[^>]*>/gi, "")
+      // Remove iframe/embed/object tags to prevent nested execution contexts.
+      .replace(/<(iframe|embed|object)\b[^<]*(?:(?!<\/\1>)<[^<]*)*<\/\1>/gi, "")
+      .trim()
+  );
+}
+
+function sanitizeCss(css: string): string {
+  // Remove @import and expression() to block external resources and IE expressions,
+  // and break out of any embedded </style> tags.
+  return css
+    .replace(/@import\s+[^;]+;/gi, "")
+    .replace(/expression\s*\(/gi, "")
+    .replace(/<\/style\b/gi, "")
+    .trim();
+}
+
+function sanitizeText(text: string): string {
+  return text.trim();
+}
+
+function sanitizeImprovements(improvements: string[]): string[] {
+  return improvements.map((i) => i.trim()).filter(Boolean).slice(0, 8);
+}

@@ -73,6 +73,22 @@ export type AnalyzeResult =
       message: string;
     };
 
+export interface RedesignPayload {
+  /** Standalone HTML body content for the improved interface preview. */
+  html: string;
+  /** CSS that styles the redesign. Kept separate for validation and CSP. */
+  css: string;
+  /** Short human-readable summary of the redesign direction. */
+  description: string;
+  /** List of concrete improvements the redesign makes over the original. */
+  improvements: string[];
+}
+
+export type RedesignResult =
+  | { status: "ok"; redesign: RedesignPayload; provider: string; model: string }
+  | { status: "ai_unconfigured"; message: string; missing: string[] }
+  | { status: "error"; message: string };
+
 export type AiSupportStatus = "ready" | "key_missing" | "provider_unsupported";
 
 export interface AiStatusResponse {

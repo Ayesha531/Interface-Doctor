@@ -7,6 +7,7 @@ import { AiStatusBadge } from "@/components/AiStatusBadge";
 import { UploadDropzone } from "@/components/UploadDropzone";
 import { ScreenshotPreview } from "@/components/ScreenshotPreview";
 import { AnalysisResultPanel } from "@/components/AnalysisResultPanel";
+import { RedesignPanel } from "@/components/RedesignPanel";
 import { RecentProjects } from "@/components/RecentProjects";
 import { fileToSelection, loadSampleSelection, makeThumbnail } from "@/lib/imageUtils";
 import {
@@ -19,6 +20,7 @@ import type {
   AiStatusResponse,
   AnalysisFinding,
   AnalyzeResult,
+  RedesignResult,
   ScreenshotSelection,
 } from "@/lib/types";
 
@@ -31,6 +33,8 @@ export function Dashboard() {
   const [activeFindingId, setActiveFindingId] = useState<string | null>(null);
   const [aiStatus, setAiStatus] = useState<AiStatusResponse | null>(null);
   const [projects, setProjects] = useState<RecentProject[]>([]);
+  const [redesignResult, setRedesignResult] = useState<RedesignResult | null>(null);
+  const [generatingRedesign, setGeneratingRedesign] = useState(false);
 
   useEffect(() => {
     setProjects(loadRecentProjects());
@@ -58,6 +62,7 @@ export function Dashboard() {
       setSelection(sel);
       setResult(null);
       setActiveFindingId(null);
+      setRedesignResult(null);
       setUploadError(null);
       void registerProject(sel);
     },
@@ -115,10 +120,43 @@ export function Dashboard() {
     }
   }, [selection, analyzing]);
 
+  const handleGenerateRedesign = useCallback(async () => {
+    if (!selection || generatingRedesign) return;
+    setGeneratingRedesign(true);
+    setRedesignResult(null);
+    try {
+      const res = await fetch("/api/redesign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: selection.dataUrl,
+          mimeType: selection.mimeType,
+          findings: result?.status === "ok" ? result.findings : [],
+          originalWidth: selection.width,
+          originalHeight: selection.height,
+        }),
+      });
+      const data = (await res.json()) as RedesignResult;
+      setRedesignResult(data);
+    } catch {
+      setRedesignResult({
+        status: "error",
+        message: "The redesign request could not be sent. Check your connection and try again.",
+      });
+    } finally {
+      setGeneratingRedesign(false);
+    }
+  }, [selection, generatingRedesign, result]);
+
+  const handleResetRedesign = useCallback(() => {
+    setRedesignResult(null);
+  }, []);
+
   const clearSelection = useCallback(() => {
     setSelection(null);
     setResult(null);
     setActiveFindingId(null);
+    setRedesignResult(null);
     setUploadError(null);
   }, []);
 
@@ -141,8 +179,8 @@ export function Dashboard() {
               </h1>
               <p className="mt-2 max-w-xl text-sm leading-relaxed text-ink-500 sm:text-base">
                 Upload a screenshot of your website or app. Interface Doctor AI reviews the
-                visual design and reports concrete problems with suggested fixes — no invented
-                results, ever.
+                visual design, reports concrete problems, and generates a safe responsive
+                redesign you can compare side-by-side — no invented results, ever.
               </p>
             </div>
             <div className="hidden rounded-xl border border-ink-200 bg-white px-4 py-3 shadow-card sm:block lg:hidden">
@@ -204,6 +242,16 @@ export function Dashboard() {
               activeFindingId={activeFindingId}
               onActivateFinding={setActiveFindingId}
             />
+
+            {selection && (
+              <RedesignPanel
+                selection={selection}
+                redesignResult={redesignResult}
+                generating={generatingRedesign}
+                onGenerate={() => void handleGenerateRedesign()}
+                onReset={handleResetRedesign}
+              />
+            )}
           </section>
 
           {/* How it works */}
@@ -211,11 +259,12 @@ export function Dashboard() {
             <h2 id="how-heading" className="text-lg font-semibold tracking-tight text-ink-900">
               How it works
             </h2>
-            <ol className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <ol className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {[
                 { step: "1", title: "Upload", text: "Drop in a PNG or JPG screenshot of any website or app screen." },
                 { step: "2", title: "Diagnose", text: "A vision AI model reviews hierarchy, spacing, contrast, typography and layout." },
-                { step: "3", title: "Improve", text: "Get prioritized findings with explanations and concrete suggested fixes." },
+                { step: "3", title: "Redesign", text: "Generate a safe, responsive webpage preview that addresses the diagnosed issues." },
+                { step: "4", title: "Compare", text: "Use the interactive before-and-after slider to see the improvements." },
               ].map((item) => (
                 <li key={item.step} className="rounded-2xl border border-ink-200 bg-white p-5 shadow-card">
                   <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-50 text-sm font-bold text-brand-700">
