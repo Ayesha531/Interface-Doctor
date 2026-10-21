@@ -34,7 +34,7 @@ export function Dashboard() {
 
   useEffect(() => {
     setProjects(loadRecentProjects());
-    fetch("/api/analyze")
+    fetch("/api/status")
       .then((r) => (r.ok ? r.json() : null))
       .then((data: AiStatusResponse | null) => setAiStatus(data))
       .catch(() => setAiStatus(null));

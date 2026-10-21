@@ -10,6 +10,7 @@
 import {
   CATEGORY_LABELS,
   FINDING_CATEGORIES,
+  type AiStatusResponse,
   type AnalysisFinding,
   type FindingCategory,
   type Severity,
@@ -23,17 +24,73 @@ export interface AiConfig {
   apiKey?: string;
 }
 
-export function getAiConfig(): AiConfig {
+export function getAiRuntimeStatus(): AiStatusResponse {
   const provider = (process.env.AI_PROVIDER || "openai").trim() || "openai";
   const model = (process.env.AI_VISION_MODEL || "gpt-4o-mini").trim() || "gpt-4o-mini";
   const apiKey = process.env.OPENAI_API_KEY?.trim();
+  const keyPresent = Boolean(apiKey);
+  const supportedProvider = provider === "openai";
+
+  if (!keyPresent) {
+    return {
+      configured: false,
+      provider,
+      model,
+      keyPresent: false,
+      supportedProvider,
+      status: "key_missing",
+      missing: ["OPENAI_API_KEY"],
+      message:
+        "OPENAI_API_KEY was not found in the server environment. " +
+        "If you already added it in the workspace Secrets panel, restart the dev server so the secret reaches the runtime.",
+      diagnostics: {
+        runtime: "nodejs",
+        variablesChecked: ["OPENAI_API_KEY", "AI_PROVIDER", "AI_VISION_MODEL"],
+      },
+    };
+  }
+
+  if (!supportedProvider) {
+    return {
+      configured: false,
+      provider,
+      model,
+      keyPresent: true,
+      supportedProvider: false,
+      status: "provider_unsupported",
+      missing: ["AI_PROVIDER"],
+      message: `An API key is present, but the provider '${provider}' is not supported. Set AI_PROVIDER=openai.`,
+      diagnostics: {
+        runtime: "nodejs",
+        variablesChecked: ["OPENAI_API_KEY", "AI_PROVIDER", "AI_VISION_MODEL"],
+      },
+    };
+  }
 
   return {
-    configured: provider === "openai" ? Boolean(apiKey) : false,
+    configured: true,
     provider,
     model,
-    missing: apiKey ? [] : ["OPENAI_API_KEY"],
-    apiKey,
+    keyPresent: true,
+    supportedProvider: true,
+    status: "ready",
+    missing: [],
+    message: "AI engine ready.",
+    diagnostics: {
+      runtime: "nodejs",
+      variablesChecked: ["OPENAI_API_KEY", "AI_PROVIDER", "AI_VISION_MODEL"],
+    },
+  };
+}
+
+export function getAiConfig(): AiConfig {
+  const runtime = getAiRuntimeStatus();
+  return {
+    configured: runtime.configured,
+    provider: runtime.provider,
+    model: runtime.model,
+    missing: runtime.missing,
+    apiKey: process.env.OPENAI_API_KEY?.trim(),
   };
 }
 

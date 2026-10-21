@@ -73,11 +73,25 @@ export type AnalyzeResult =
       message: string;
     };
 
+export type AiSupportStatus = "ready" | "key_missing" | "provider_unsupported";
+
 export interface AiStatusResponse {
   configured: boolean;
   provider: string;
   model: string;
+  /** True when OPENAI_API_KEY (or the provider-specific key) is present in the server environment. */
+  keyPresent: boolean;
+  /** True when the configured provider is implemented by the application. */
+  supportedProvider: boolean;
+  status: AiSupportStatus;
   missing: string[];
+  /** Human-readable, safe explanation of the current AI configuration state. */
+  message: string;
+  /** Safe runtime diagnostics — never includes the secret value. */
+  diagnostics: {
+    runtime: "nodejs";
+    variablesChecked: string[];
+  };
 }
 
 export interface ScreenshotSelection {

@@ -3,11 +3,11 @@
 **by Team DebugMD** — an AI-powered interface improvement tool. Upload a screenshot of a
 website or app, and get an honest AI diagnosis of design problems with suggested fixes.
 
-This repository currently contains **Phase 2**: real AI-powered vision diagnosis with
-prioritized findings (including critical/high/medium/low severity), category filters,
-confidence levels, and clickable screenshot issue markers that highlight the corresponding
-finding card. Phase 1's branded dashboard, validated drag-and-drop screenshot upload (plus a
-sample option), recent projects, and honest AI-status reporting are preserved and extended.
+This repository currently contains **Phase 3**: accurate runtime detection of the
+`OPENAI_API_KEY` secret with safe server-side diagnostics, distinct status messages for
+"key not found" vs "provider unsupported", and updated usage docs. Phase 2's real
+AI-powered vision diagnosis with prioritized findings, category filters, confidence levels,
+and clickable screenshot issue markers is preserved and extended.
 
 ## Stack
 
@@ -41,6 +41,32 @@ The provider is configurable via environment variables (see `.env.example`):
 | `AI_PROVIDER` | Provider identifier (default `openai`) so future providers can be swapped in. |
 | `AI_VISION_MODEL` | Vision model name (default `gpt-4o-mini`). |
 
+**How secrets reach the app:**
+
+1. Add `OPENAI_API_KEY` in the workspace **Secrets** panel.
+2. **Restart the dev server** (`npm run dev`) after adding or changing a secret. Next.js reads
+   environment variables at process startup, so a running server will not see new secrets until
+   it is restarted.
+3. The dashboard fetches `/api/status`, which inspects `process.env.OPENAI_API_KEY` inside the
+   Node.js runtime and returns a safe diagnostic (key present/absent, never the value).
+
+**Status badge meanings:**
+
+- **AI engine ready** — the key is present and `AI_PROVIDER` is supported.
+- **Key not found in server environment** — `OPENAI_API_KEY` is missing from the runtime.
+  Restart the dev server if you already added the secret.
+- **Key present but provider unsupported** — the key exists, but `AI_PROVIDER` is set to a
+  provider that is not implemented. Set `AI_PROVIDER=openai`.
+
+You can also verify the runtime status directly:
+
+```bash
+curl http://localhost:3000/api/status
+```
+
+The response only reports whether the key is present and whether the provider is supported;
+the secret value is never returned.
+
 **If no key is configured**, the upload/preview workflow still works end-to-end and the UI
 clearly states that AI analysis requires configuration — no fake findings are ever shown.
 When a key is present, the route performs a genuine OpenAI vision request and validates the
@@ -61,6 +87,7 @@ app/
   page.tsx              Dashboard entry
   globals.css           Tailwind layers + focus styles
   api/analyze/route.ts  GET: AI config status · POST: validate + diagnose
+  api/status/route.ts   GET: safe runtime AI-status diagnostics
 components/
   Dashboard.tsx              Client-side state orchestration
   Sidebar.tsx, Logo.tsx, AiStatusBadge.tsx
