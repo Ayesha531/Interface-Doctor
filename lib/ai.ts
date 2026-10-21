@@ -1,16 +1,16 @@
 /**
  * Server-side AI provider configuration and vision diagnosis call.
  *
- * Phase 2 scope: a stronger structured prompt that asks for category,
- * confidence, and screenshot regions; validated parsing; and findings sorted
- * by severity. The provider is selected via AI_PROVIDER so alternatives can
- * be added without touching client code.
+ * Phase 4 scope: Ollama-first provider configuration with useful diagnostics
+ * for missing models, connection failures, malformed responses, and oversized
+ * images. No mock findings are ever returned.
  */
 
+import { callOllamaChat, getOllamaBaseUrl } from "@/lib/ollama";
+import { extractJsonContent } from "@/lib/jsonExtraction";
 import {
   CATEGORY_LABELS,
   FINDING_CATEGORIES,
-  type AiStatusResponse,
   type AnalysisFinding,
   type FindingCategory,
   type Severity,
@@ -25,21 +25,11 @@ export interface AiConfig {
 }
 
 export function getAiRuntimeStatus(): AiStatusResponse {
-  const provider = (
-    process.env.AI_PROVIDER || "ollama"
-  ).trim().toLowerCase();
-
-  const model = (
-    process.env.AI_VISION_MODEL || "gemma3"
-  ).trim();
-
+  const provider = (process.env.AI_PROVIDER || "ollama").trim().toLowerCase();
+  const model = (process.env.AI_VISION_MODEL || "gemma3").trim();
   const apiKey = process.env.OPENAI_API_KEY?.trim();
 
-  const supportedProvider =
-    provider === "ollama" || provider === "openai";
-
-  const keyPresent =
-    provider === "ollama" || Boolean(apiKey);
+  const supportedProvider = provider === "ollama" || provider === "openai";
 
   const variablesChecked = [
     "AI_PROVIDER",
@@ -60,10 +50,7 @@ export function getAiRuntimeStatus(): AiStatusResponse {
       message:
         `Provider '${provider}' is not supported. ` +
         "Set AI_PROVIDER=ollama or AI_PROVIDER=openai.",
-      diagnostics: {
-        runtime: "nodejs",
-        variablesChecked,
-      },
+      diagnostics: { runtime: "nodejs", variablesChecked },
     };
   }
 
@@ -79,10 +66,7 @@ export function getAiRuntimeStatus(): AiStatusResponse {
       message:
         "OPENAI_API_KEY is required when using OpenAI. " +
         "For local inference without an API key, use Ollama.",
-      diagnostics: {
-        runtime: "nodejs",
-        variablesChecked,
-      },
+      diagnostics: { runtime: "nodejs", variablesChecked },
     };
   }
 
@@ -90,7 +74,7 @@ export function getAiRuntimeStatus(): AiStatusResponse {
     configured: true,
     provider,
     model,
-    keyPresent,
+    keyPresent: provider === "ollama" || Boolean(apiKey),
     supportedProvider: true,
     status: "ready",
     missing: [],
@@ -98,10 +82,7 @@ export function getAiRuntimeStatus(): AiStatusResponse {
       provider === "ollama"
         ? "Ollama AI engine configured."
         : "OpenAI AI engine configured.",
-    diagnostics: {
-      runtime: "nodejs",
-      variablesChecked,
-    },
+    diagnostics: { runtime: "nodejs", variablesChecked },
   };
 }
 
@@ -168,18 +149,10 @@ export async function runVisionDiagnosis(
     );
   }
 
-  let response: Response;
+  let rawContent: string;
 
   if (config.provider === "ollama") {
-    const baseUrl = (
-      process.env.OLLAMA_BASE_URL ||
-      "http://localhost:11434"
-    ).replace(/\/+$/, "");
-
-    const imageMatch = imageDataUrl.match(
-      /^data:image\/[^;]+;base64,(.+)$/s,
-    );
-
+    const imageMatch = imageDataUrl.match(/^data:image\/[^;]+;base64,(.+)$/s);
     if (!imageMatch) {
       throw new AiRequestError(
         "The supplied screenshot is not a valid base64 image data URL.",
@@ -188,92 +161,91 @@ export async function runVisionDiagnosis(
     }
 
     try {
-      response = await fetch(`${baseUrl}/api/chat`, {
+      rawContent = await callOllamaChat(getOllamaBaseUrl(), config.model, {
+        systemPrompt: SYSTEM_PROMPT,
+        userPrompt: "Diagnose the interface problems in this screenshot.",
+        imageBase64: imageMatch[1],
+        numPredict: 1_500,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new AiRequestError(message, classifyOllamaError(message));
+    }
+  } else if (config.provider === "openai") {
+    if (!config.apiKey) {
+      throw new AiRequestError("OPENAI_API_KEY is missing.", "provider_error");
+    }
+
+    let response: Response;
+    try {
+      response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${config.apiKey}`,
         },
         body: JSON.stringify({
           model: config.model,
-          stream: false,
-          format: "json",
-          options: {
-            num_predict: 1500,
-          },
+          max_tokens: 1500,
+          response_format: { type: "json_object" },
           messages: [
-            {
-              role: "system",
-              content: SYSTEM_PROMPT,
-            },
+            { role: "system", content: SYSTEM_PROMPT },
             {
               role: "user",
-              content:
-                "Diagnose the interface problems in this screenshot.",
-              images: [imageMatch[1]],
+              content: [
+                {
+                  type: "text",
+                  text: "Diagnose the interface problems in this screenshot.",
+                },
+                { type: "image_url", image_url: { url: imageDataUrl } },
+              ],
             },
           ],
         }),
       });
     } catch {
       throw new AiRequestError(
-        "Could not reach Ollama. Make sure Ollama is running and OLLAMA_BASE_URL points to the correct machine.",
-        "network",
-      );
-    }
-  } else if (config.provider === "openai") {
-    if (!config.apiKey) {
-      throw new AiRequestError(
-        "OPENAI_API_KEY is missing.",
-        "provider_error",
-      );
-    }
-
-    try {
-      response = await fetch(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${config.apiKey}`,
-          },
-          body: JSON.stringify({
-            model: config.model,
-            max_tokens: 1500,
-            response_format: {
-              type: "json_object",
-            },
-            messages: [
-              {
-                role: "system",
-                content: SYSTEM_PROMPT,
-              },
-              {
-                role: "user",
-                content: [
-                  {
-                    type: "text",
-                    text:
-                      "Diagnose the interface problems in this screenshot.",
-                  },
-                  {
-                    type: "image_url",
-                    image_url: {
-                      url: imageDataUrl,
-                    },
-                  },
-                ],
-              },
-            ],
-          }),
-        },
-      );
-    } catch {
-      throw new AiRequestError(
         "Could not reach OpenAI. Check the network connection and try again.",
         "network",
       );
     }
+
+    if (response.status === 429) {
+      throw new AiRequestError(
+        "The AI provider rate limit was reached. Wait a moment and try again.",
+        "rate_limited",
+      );
+    }
+
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const errorPayload = (await response.json()) as {
+          error?: { message?: string };
+        };
+        detail = errorPayload.error?.message || "";
+      } catch {
+        // The provider did not return a readable error body.
+      }
+      throw new AiRequestError(
+        `${config.provider} returned HTTP ${response.status}.${
+          detail ? ` ${detail}` : ""
+        }`,
+        "provider_error",
+      );
+    }
+
+    const payload = (await response.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new AiRequestError(
+        "The AI provider returned an empty response.",
+        "invalid_response",
+      );
+    }
+    rawContent = extractJsonContent(content);
   } else {
     throw new AiRequestError(
       `Unsupported AI provider: ${config.provider}.`,
@@ -281,70 +253,29 @@ export async function runVisionDiagnosis(
     );
   }
 
-  if (response.status === 429) {
-    throw new AiRequestError(
-      "The AI provider rate limit was reached. Wait a moment and try again.",
-      "rate_limited",
-    );
+  return parseFindings(rawContent);
+}
+
+function classifyOllamaError(message: string): AiRequestError["kind"] {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("could not reach") ||
+    lower.includes("fetch failed") ||
+    lower.includes("connect")
+  ) {
+    return "network";
   }
-
-  if (!response.ok) {
-    let detail = "";
-
-    try {
-      const errorPayload = (await response.json()) as {
-        error?: { message?: string };
-      };
-
-      detail = errorPayload.error?.message || "";
-    } catch {
-      // The provider did not return a readable error body.
-    }
-
-    throw new AiRequestError(
-      `${config.provider} returned HTTP ${response.status}.` +
-        (detail ? ` ${detail}` : ""),
-      "provider_error",
-    );
+  if (
+    lower.includes("not installed") ||
+    lower.includes("not found") ||
+    lower.includes("not supported")
+  ) {
+    return "provider_error";
   }
-
-  let content: string | undefined;
-
-  try {
-    if (config.provider === "ollama") {
-      const payload = (await response.json()) as {
-        message?: {
-          content?: string;
-        };
-      };
-
-      content = payload.message?.content;
-    } else {
-      const payload = (await response.json()) as {
-        choices?: {
-          message?: {
-            content?: string;
-          };
-        }[];
-      };
-
-      content = payload.choices?.[0]?.message?.content;
-    }
-  } catch {
-    throw new AiRequestError(
-      "The AI provider returned an unreadable response.",
-      "invalid_response",
-    );
+  if (lower.includes("json") || lower.includes("empty response")) {
+    return "invalid_response";
   }
-
-  if (!content) {
-    throw new AiRequestError(
-      "The AI provider returned an empty response.",
-      "invalid_response",
-    );
-  }
-
-  return parseFindings(content);
+  return "provider_error";
 }
 
 const VALID_SEVERITIES: readonly Severity[] = [
@@ -354,13 +285,11 @@ const VALID_SEVERITIES: readonly Severity[] = [
   "low",
 ];
 
-function parseFindings(
-  content: string,
-): AnalysisFinding[] {
+function parseFindings(content: string): AnalysisFinding[] {
   let parsed: unknown;
 
   try {
-    parsed = JSON.parse(content);
+    parsed = JSON.parse(extractJsonContent(content));
   } catch {
     throw new AiRequestError(
       "The AI response was not valid JSON.",
@@ -368,9 +297,7 @@ function parseFindings(
     );
   }
 
-  const raw = (
-    parsed as { findings?: unknown }
-  )?.findings;
+  const raw = (parsed as { findings?: unknown })?.findings;
 
   if (!Array.isArray(raw)) {
     throw new AiRequestError(
@@ -388,10 +315,7 @@ function parseFindings(
 
     const f = item as Record<string, unknown>;
 
-    if (
-      typeof f.title !== "string" ||
-      typeof f.explanation !== "string"
-    ) {
+    if (typeof f.title !== "string" || typeof f.explanation !== "string") {
       continue;
     }
 
@@ -402,17 +326,12 @@ function parseFindings(
     findings.push({
       id: crypto.randomUUID(),
       title: f.title,
-      severity: VALID_SEVERITIES.includes(
-        f.severity as Severity,
-      )
+      severity: VALID_SEVERITIES.includes(f.severity as Severity)
         ? (f.severity as Severity)
         : "medium",
       category,
       explanation: f.explanation,
-      suggestion:
-        typeof f.suggestion === "string"
-          ? f.suggestion
-          : "",
+      suggestion: typeof f.suggestion === "string" ? f.suggestion : "",
       confidence,
       region,
     });
@@ -433,29 +352,21 @@ function parseFindings(
   };
 
   return findings.sort(
-    (a, b) =>
-      severityRank[a.severity] -
-      severityRank[b.severity],
+    (a, b) => severityRank[a.severity] - severityRank[b.severity],
   );
 }
 
-function parseCategory(
-  value: unknown,
-): FindingCategory {
+function parseCategory(value: unknown): FindingCategory {
   if (typeof value !== "string") {
     return "other";
   }
 
-  return (
-    FINDING_CATEGORIES as readonly string[]
-  ).includes(value)
+  return (FINDING_CATEGORIES as readonly string[]).includes(value)
     ? (value as FindingCategory)
     : "other";
 }
 
-function parseConfidence(
-  value: unknown,
-): number | undefined {
+function parseConfidence(value: unknown): number | undefined {
   if (
     typeof value !== "number" ||
     !Number.isFinite(value) ||
@@ -471,10 +382,7 @@ function parseConfidence(
 function parseRegion(
   value: unknown,
 ): AnalysisFinding["region"] {
-  if (
-    typeof value !== "object" ||
-    value === null
-  ) {
+  if (typeof value !== "object" || value === null) {
     return undefined;
   }
 
@@ -483,9 +391,7 @@ function parseRegion(
 
   if (
     !nums.every(
-      (n) =>
-        typeof n === "number" &&
-        Number.isFinite(n),
+      (n) => typeof n === "number" && Number.isFinite(n),
     )
   ) {
     return undefined;
@@ -503,7 +409,5 @@ function parseRegion(
     x + width <= 1 &&
     y + height <= 1;
 
-  return inRange
-    ? { x, y, width, height }
-    : undefined;
+  return inRange ? { x, y, width, height } : undefined;
 }

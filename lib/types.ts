@@ -89,7 +89,12 @@ export type RedesignResult =
   | { status: "ai_unconfigured"; message: string; missing: string[] }
   | { status: "error"; message: string };
 
-export type AiSupportStatus = "ready" | "key_missing" | "provider_unsupported";
+export type AiSupportStatus =
+  | "ready"
+  | "key_missing"
+  | "provider_unsupported"
+  | "ollama_unreachable"
+  | "model_missing";
 
 export interface AiStatusResponse {
   configured: boolean;
@@ -107,6 +112,14 @@ export interface AiStatusResponse {
   diagnostics: {
     runtime: "nodejs";
     variablesChecked: string[];
+    /** The Ollama base URL that the server will contact (no credentials). */
+    ollamaBaseUrl?: string;
+    /** Whether the Ollama /api/tags endpoint responded successfully. */
+    ollamaReachable?: boolean;
+    /** Whether the configured model appears in the list of installed Ollama models. */
+    modelInstalled?: boolean;
+    /** A safe error hint when Ollama is unreachable or the model is missing. */
+    modelError?: string;
   };
 }
 

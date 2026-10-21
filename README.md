@@ -38,26 +38,27 @@ The provider is configurable via environment variables (see `.env.example`):
 
 | Variable | Purpose |
 |----------|---------|
-| `OPENAI_API_KEY` | Vision AI key, read only on the server. Add it in the workspace **Secrets** panel. |
-| `AI_PROVIDER` | Provider identifier (default `openai`) so future providers can be swapped in. |
-| `AI_VISION_MODEL` | Vision model name (default `gpt-4o-mini`). |
+| `AI_PROVIDER` | AI engine to use. Default `ollama`; set to `openai` to use OpenAI. |
+| `OLLAMA_BASE_URL` | Local Ollama endpoint. Default `http://localhost:11434`. In GitHub Codespaces this refers to the Codespace/container environment, not your personal computer. |
+| `AI_VISION_MODEL` | Model used for analysis and redesign. Default `gemma3` for Ollama; must be installed and support image inputs. |
+| `OPENAI_API_KEY` | Required only when `AI_PROVIDER=openai`. Add it in the workspace **Secrets** panel. |
 
-**How secrets reach the app:**
+**How environment variables reach the app:**
 
-1. Add `OPENAI_API_KEY` in the workspace **Secrets** panel.
+1. Add variables in the workspace **Secrets** panel (or use `.env.example` as a reference for a local `.env` file).
 2. **Restart the dev server** (`npm run dev`) after adding or changing a secret. Next.js reads
    environment variables at process startup, so a running server will not see new secrets until
    it is restarted.
-3. The dashboard fetches `/api/status`, which inspects `process.env.OPENAI_API_KEY` inside the
-   Node.js runtime and returns a safe diagnostic (key present/absent, never the value).
+3. The dashboard fetches `/api/status`, which inspects the server environment and optionally
+   probes Ollama `/api/tags`. It returns safe diagnostics only; the secret value is never exposed.
 
 **Status badge meanings:**
 
-- **AI engine ready** — the key is present and `AI_PROVIDER` is supported.
-- **Key not found in server environment** — `OPENAI_API_KEY` is missing from the runtime.
-  Restart the dev server if you already added the secret.
-- **Key present but provider unsupported** — the key exists, but `AI_PROVIDER` is set to a
-  provider that is not implemented. Set `AI_PROVIDER=openai`.
+- **AI engine ready** — the provider is supported and (for Ollama) the service is reachable and the model is installed.
+- **Ollama unreachable** — `AI_PROVIDER=ollama` is set, but the server cannot reach Ollama at `OLLAMA_BASE_URL`.
+- **Model missing** — Ollama is reachable, but the configured `AI_VISION_MODEL` is not installed.
+- **Key not found in server environment** — `AI_PROVIDER=openai` but `OPENAI_API_KEY` is missing.
+- **Provider unsupported** — `AI_PROVIDER` is set to a value that is not implemented.
 
 You can also verify the runtime status directly:
 
@@ -65,14 +66,13 @@ You can also verify the runtime status directly:
 curl http://localhost:3000/api/status
 ```
 
-The response only reports whether the key is present and whether the provider is supported;
+The response reports configuration, Ollama reachability, and model availability;
 the secret value is never returned.
 
-**If no key is configured**, the upload/preview workflow still works end-to-end and the UI
-clearly states that AI analysis requires configuration — no fake findings are ever shown.
-When a key is present, the route performs a genuine OpenAI vision request and validates the
-JSON response before displaying it. Rate limits, network failures and invalid responses are
-surfaced as honest error messages.
+**If no AI service is reachable**, the upload/preview workflow still works end-to-end and the UI
+clearly explains the issue — no fake findings or redesigns are ever shown. Rate limits, network
+failures, missing models, invalid request formats, and malformed responses are surfaced as honest
+error messages.
 
 ## Responsive redesign and before/after comparison
 
@@ -124,6 +124,8 @@ components/
 lib/
   types.ts                   Shared API/domain types (findings, categories, regions, redesign)
   ai.ts                      Server-side provider config + validated vision call
+  ollama.ts                  Shared Ollama connectivity, model checks, and chat helpers
+  jsonExtraction.ts          Robust JSON extraction from Markdown-fenced AI responses
   redesign.ts                Server-side AI redesign generation + HTML/CSS sanitization
   geometry.ts                Map fractional regions to rendered screenshot pixels
   uploadValidation.ts        PNG/JPG + 10 MB validation, byte formatting

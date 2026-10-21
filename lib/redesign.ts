@@ -1,13 +1,16 @@
 /**
  * Server-side AI-generated responsive redesign.
  *
- * Generates a static HTML + CSS preview of an improved interface. The output
- * is sanitized to remove scripts and event handlers before it is returned to
- * the client, and it is rendered inside a sandboxed iframe so arbitrary
- * AI-generated JavaScript can never execute.
+ * Generates a static HTML + CSS preview of an improved interface using the
+ * configured AI provider (Ollama or OpenAI). The output is sanitized to remove
+ * scripts and event handlers before it is returned to the client, and it is
+ * rendered inside a sandboxed iframe so arbitrary AI-generated JavaScript can
+ * never execute.
  */
 
 import { getAiConfig, getAiRuntimeStatus } from "@/lib/ai";
+import { callOllamaChat, getOllamaBaseUrl } from "@/lib/ollama";
+import { extractJsonContent } from "@/lib/jsonExtraction";
 import type { AnalysisFinding, RedesignPayload } from "@/lib/types";
 
 export interface RedesignOptions {
@@ -40,60 +43,101 @@ function buildUserPrompt(options: RedesignOptions): string {
 
   const points = findings
     .slice(0, 6)
-    .map((f) => `- ${f.title} (${f.severity}): ${f.suggestion || f.explanation}`)
+    .map(
+      (f) =>
+        `- ${f.title} (${f.severity}): ${f.suggestion || f.explanation}`,
+    )
     .join("\n");
 
   return `${base}\n\nAddress these diagnosed issues where applicable:\n${points}`;
 }
 
-export async function runRedesignGeneration(options: RedesignOptions): Promise<RedesignPayload> {
+export async function runRedesignGeneration(
+  options: RedesignOptions,
+): Promise<RedesignPayload> {
   const runtimeStatus = getAiRuntimeStatus();
   if (!runtimeStatus.configured) {
-    throw new Error("AI provider is not configured.");
+    throw new Error(
+      `AI provider is not configured. ${runtimeStatus.message}`,
+    );
   }
 
   const config = getAiConfig();
-  if (!config.apiKey) {
-    throw new Error("AI provider is not configured.");
+  if (config.provider === "openai" && !config.apiKey) {
+    throw new Error("OPENAI_API_KEY is required when using OpenAI.");
   }
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.model,
-      max_tokens: 2000,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: REDESIGN_SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: buildUserPrompt(options.findings) },
-            { type: "image_url", image_url: { url: options.imageDataUrl } },
-          ],
+  const imageMatch = options.imageDataUrl.match(
+    /^data:image\/[^;]+;base64,(.+)$/s,
+  );
+  if (!imageMatch) {
+    throw new Error(
+      "The supplied screenshot is not a valid base64 image data URL.",
+    );
+  }
+
+  let rawContent: string;
+
+  if (config.provider === "ollama") {
+    try {
+      rawContent = await callOllamaChat(getOllamaBaseUrl(), config.model, {
+        systemPrompt: REDESIGN_SYSTEM_PROMPT,
+        userPrompt: buildUserPrompt(options),
+        imageBase64: imageMatch[1],
+        numPredict: 2_500,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(message);
+    }
+  } else if (config.provider === "openai") {
+    const response = await fetch(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${config.apiKey}`,
         },
-      ],
-    }),
-  });
+        body: JSON.stringify({
+          model: config.model,
+          max_tokens: 2000,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: REDESIGN_SYSTEM_PROMPT },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: buildUserPrompt(options) },
+                {
+                  type: "image_url",
+                  image_url: { url: options.imageDataUrl },
+                },
+              ],
+            },
+          ],
+        }),
+      },
+    );
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`AI provider returned HTTP ${response.status}. ${body}`);
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`AI provider returned HTTP ${response.status}. ${body}`);
+    }
+
+    const payload = (await response.json()) as {
+      choices?: { message?: { content?: string } }[];
+    };
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content) {
+      throw new Error("The AI provider returned an empty redesign response.");
+    }
+    rawContent = extractJsonContent(content);
+  } else {
+    throw new Error(`Unsupported AI provider: ${config.provider}.`);
   }
 
-  const payload = (await response.json()) as {
-    choices?: { message?: { content?: string } }[];
-  };
-  const content = payload.choices?.[0]?.message?.content;
-  if (!content) {
-    throw new Error("The AI provider returned an empty redesign response.");
-  }
-
-  const parsed = parseRedesignPayload(content);
+  const parsed = parseRedesignPayload(rawContent);
   return {
     html: sanitizeHtml(parsed.html),
     css: sanitizeCss(parsed.css),
@@ -105,7 +149,7 @@ export async function runRedesignGeneration(options: RedesignOptions): Promise<R
 function parseRedesignPayload(content: string): RedesignPayload {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    parsed = JSON.parse(extractJsonContent(content));
   } catch {
     throw new Error("The AI redesign response was not valid JSON.");
   }
@@ -126,7 +170,8 @@ function parseRedesignPayload(content: string): RedesignPayload {
   return {
     html: p.html,
     css: p.css,
-    description: typeof p.description === "string" ? p.description : "",
+    description:
+      typeof p.description === "string" ? p.description : "",
     improvements,
   };
 }
@@ -135,15 +180,24 @@ function sanitizeHtml(html: string): string {
   return (
     html
       // Remove <script> elements and their contents.
-      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+      .replace(
+        /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+        "",
+      )
       // Remove javascript: URLs.
       .replace(/\s*javascript\s*:\s*/gi, "")
       // Remove inline event handlers.
-      .replace(/\s+on\w+\s*=\s*("[^"]*"|'[^']*'|`[^`]*`|[^\s>]*)/gi, "")
+      .replace(
+        /\s+on\w+\s*=\s*("[^"]*"|'[^']*'|`[^`]*`|[^\s>]*)/gi,
+        "",
+      )
       // Remove meta refresh / CSP meta tags for safety.
       .replace(/<meta\b[^>]*>/gi, "")
       // Remove iframe/embed/object tags to prevent nested execution contexts.
-      .replace(/<(iframe|embed|object)\b[^<]*(?:(?!<\/\1>)<[^<]*)*<\/\1>/gi, "")
+      .replace(
+        /<(iframe|embed|object)\b[^<]*(?:(?!<\/\1>)<[^<]*)*<\/\1>/gi,
+        "",
+      )
       .trim()
   );
 }

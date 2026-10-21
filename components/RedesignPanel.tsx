@@ -1,5 +1,7 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element */
+
 import { useCallback, useState } from "react";
 import { SafeHtmlPreview } from "@/components/SafeHtmlPreview";
 import { BeforeAfterComparison } from "@/components/BeforeAfterComparison";
