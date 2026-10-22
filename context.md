@@ -1,142 +1,251 @@
-Interface Doctor AI — Context, Phase 1–5 (Documentation & Next Steps)
+Interface Doctor AI — Context (Phase 5: Documentation & Verification)
 
-Summary
-- Purpose: Interface Doctor AI analyzes UI screenshots and generates prioritized accessibility/usability findings plus an AI-suggested responsive HTML/CSS redesign. The project is a Next.js + TypeScript app with Tailwind UI and pluggable AI providers (Ollama or OpenAI).
-- Scope of this document: concise project purpose, architecture, Phase 1–4 completed work, root causes found, minimal fixes applied in Phase 4, what remains to validate in a Codespace with Ollama, exact test & git steps, and file/API map. This document intentionally omits any secrets.
+One-line purpose
+- Interface Doctor AI analyzes UI screenshots and produces prioritized accessibility/usability findings and an AI-generated responsive HTML/CSS redesign. Built with Next.js + TypeScript and a pluggable AI provider layer (Ollama or OpenAI).
 
-Architecture & key flows
-- Frontend: Next.js (App Router), TypeScript, Tailwind. Components live in components/*.tsx. Key UIs: Dashboard, UploadDropzone, AnalysisResultPanel, RedesignPanel, BeforeAfterComparison.
-- Server/API: Next.js route handlers under app/api:
-  - POST /api/analyze — accepts uploaded screenshot + options, performs AI diagnosis.
-  - POST /api/redesign — accepts screenshot + diagnosis, generates sanitized HTML/CSS redesign.
-  - GET /api/status — reports AI runtime configuration and lightweight provider diagnostics.
-- AI layers:
-  - lib/ai.ts — provider-agnostic helpers, runtime status, configuration resolution.
-  - lib/ollama.ts — Ollama-specific client, request building, response parsing, and diagnostics.
-  - lib/redesign.ts — prompt templates and helper for generating redesign HTML/CSS.
-- Security: AI-generated HTML is sanitized server-side (SafeHtmlPreview), and rendered in a sandboxed iframe with a restrictive CSP on the client.
+Scope of this document
+- Concise reference describing: purpose, architecture, Phase 1–4 status, Phase 4 root causes and fixes, files changed, how to verify in GitHub Codespaces (Ollama environment), and exact next steps. No secrets are included.
 
-Actors
-- User: uploads a screenshot, reads findings, runs redesign generator, previews before/after.
-- Developer: configures Ollama or OpenAI in environment, runs typecheck/lint, deploys.
-- CI/Runner: expected to run typecheck/lint/build; no DB required.
+Project architecture (high level)
+- Frontend: Next.js App Router (app/), TypeScript, Tailwind CSS. UI components are under components/*.tsx. SafeHtmlPreview renders AI HTML in a sandboxed iframe with server-side sanitization.
+- Server/API: Next.js route handlers at app/api/* (analyze, redesign, status). Routes accept FormData, call the selected AI provider, sanitize outputs, and return structured JSON.
+- AI provider layer: lib/ai.ts chooses and validates providers. lib/ollama.ts contains Ollama-specific request/response logic. lib/redesign.ts composes prompts and post-processes HTML/CSS.
+- Security: No secrets are exposed to clients. Generated HTML/CSS are sanitized server-side. The iframe is sandboxed and the app enforces a restrictive CSP.
 
-Phase 1–4 status (completed work)
-- Phase 1: Project scaffold, file upload, screenshot preview, and basic UI completed.
-- Phase 2: Initial AI integration and OpenAI support implemented.
-- Phase 3: Added Ollama support and Vision-model handling; prepared unified provider patterns.
-- Phase 4: Fixed several runtime issues preventing analysis/redesign. Key changes applied (minimal and targeted):
-  - lib/ollama.ts: robust response parsing across known Ollama response shapes; removed duplicate variable name (previously two variables named 'payload' caused runtime exceptions), renamed internal variables to avoid collisions and ensure correct result extraction.
-  - lib/ai.ts: getAiRuntimeStatus and related checks converted to async where needed and clarified behavior so Ollama is considered configured when AI_PROVIDER=ollama (no OPENAI_API_KEY required).
-  - app/api/analyze/route.ts and app/api/redesign/route.ts: now await runtime diagnostics, validate inputs, and return structured, non-opaque errors (including clear messages for unreachable Ollama, missing model, oversized images, or malformed AI responses).
-  - components/AnalysisResultPanel.tsx: defensive checks for missing arrays/fields to avoid .join() on undefined and removed side-effectful state updates during render.
-  - components/RedesignPanel.tsx and SafeHtmlPreview.tsx: ensured sanitized HTML remains server-side and iframe sandbox retained.
+Completed phases (1–4)
+- Phase 1: Project scaffolding, upload UI, initial OpenAI integration, safe preview components.
+- Phase 2: Provider abstraction and initial Ollama support for analysis/redesign prompts.
+- Phase 3: Type-checking, lint fixes, server-side diagnostics (api/status), and robust validation of uploaded images.
+- Phase 4: Root-cause fixes and hardening to make the analysis & redesign flows robust to Ollama response shape variations and provider misconfiguration.
 
-Root causes discovered and fixes applied
-1) HTTP 500 from Ollama calls (analysis):
-   - Root cause: lib/ollama.ts assumed a single rigid response shape and referenced a duplicated/incorrect variable name which could be undefined when Ollama returned a slightly different response shape. This threw and produced an unhelpful HTTP 500.
-   - Fix: made response parsing tolerant of multiple shapes (choices/message/output/text/result), renamed the duplicate variable and ensured the function returns a consistent parsed object or a clear error with returned Ollama error text when available.
+Phase 4 root causes (confirmed)
+1) Ollama HTTP 500 during analysis
+   - Symptom: /api/analyze returned 500 and the UI showed a generic "request could not be sent" message.
+   - Cause: brittle response parsing and a duplicate variable name inside lib/ollama.ts (two variables named `payload` in the same scope). The duplicate shadowed the response in some shapes and led to runtime exceptions (500).
+   - Fix applied: Renamed the duplicate variable to `result`, added tolerant parsing that attempts multiple fields (choices, output, text, result), and surface clear errors when response is malformed.
 
-2) Redesign reported "AI provider not configured":
-   - Root cause: runtime status logic conflated OpenAI-only checks with provider selection; Ollama path incorrectly required an OPENAI_API_KEY in some checks.
-   - Fix: clarified provider logic: when AI_PROVIDER=ollama, do not require OPENAI_API_KEY. getAiRuntimeStatus now performs a lightweight /api/tags-check (via OLLAMA_BASE_URL) and reports model resolution and reachability.
+2) Redesign reported "AI provider not configured"
+   - Symptom: /api/redesign incorrectly required OpenAI keys even when AI_PROVIDER=ollama.
+   - Cause: provider checks were OpenAI-centric and sometimes validated OPENAI_API_KEY unnecessarily.
+   - Fix applied: Provider-selection logic in lib/ai.ts was clarified so Ollama no longer requires OpenAI keys. getAiRuntimeStatus now performs provider-aware lightweight checks: it validates OLLAMA_BASE_URL reachability and resolves model names/tags (e.g. gemma3 -> gemma3:latest) before declaring a model available.
 
-3) Client crash in AnalysisResultPanel (.join undefined) and React warning about updates during render:
-   - Root cause: UI code assumed the AI response shape contained arrays/fields that were missing for error responses; additionally a state update/side-effect occurred during render leading to React warnings.
-   - Fix: Added defensive validation and default values before using .join or rendering lists; moved side-effects to useEffect or event handlers.
+3) Client-side crash and React warning in AnalysisResultPanel
+   - Symptom: AnalysisResultPanel crashed at a .join() call and React warned about updating a component during render.
+   - Cause: UI assumed arrays were present and called .join() on undefined. Additionally, a state update was triggered during render causing the React warning.
+   - Fix applied: Defensive checks added to components/AnalysisResultPanel.tsx (guard .join calls, default to empty arrays/strings), moved state changes into useEffect or event handlers to avoid updates during render.
 
-What was NOT done here (limitations of this environment)
-- I could not run the dev server, contact your Ollama instance, or run npm scripts (typecheck/lint/build) from this environment. All fixes are code edits only — they must be verified in your Codespace where Ollama and gemma3 are installed.
-- I did not create or push a Git branch from this environment. I prepared code changes in the repository that should be committed on the review branch described below.
+Files changed (Phase 4 fixes — minimal and focused)
+- lib/ollama.ts — robust response parsing; renamed duplicate variables; improved error messages for malformed responses and unreachable service.
+- lib/ai.ts — provider selection, provider-aware runtime diagnostics, and model-name resolution.
+- lib/redesign.ts — unified provider usage for redesign generation; validation of inputs passed to redesign model.
+- app/api/analyze/route.ts — better validation, structured error responses, and non-leaky diagnostics.
+- app/api/redesign/route.ts — input validation, provider usage fix, and sanitized HTML in responses.
+- app/api/status/route.ts — safe provider diagnostics (no secrets) including reachable/modelAvailable flags.
+- components/AnalysisResultPanel.tsx — defensive rendering (no .join on undefined), moved side-effects out of render.
+- components/RedesignPanel.tsx — response-shape validation, clearer error display and retry handling.
 
-Files changed in this patch (minimal, focused)
-- lib/ollama.ts — make response parsing robust, rename duplicated var, improved error messages and diagnostics handling.
-- lib/ai.ts — async runtime status checks; clarified provider selection; improved diagnostics for Ollama.
-- lib/redesign.ts — use unified Ollama client flow; await config; validate inputs.
-- app/api/analyze/route.ts — await diagnostics and return structured errors.
-- app/api/redesign/route.ts — await diagnostics and return structured errors.
-- app/api/status/route.ts — include provider diagnostics for Ollama.
-- components/AnalysisResultPanel.tsx — defensive null-checks and moved side-effects out of render.
-- components/RedesignPanel.tsx — ensure API responses are validated before use.
-
-Key API routes and expectations
+What the APIs now return (contracts)
 - POST /api/analyze
-  - Request: FormData with screenshot file or JSON with base64 image (UI uses FormData). Max size validated server-side (<= app config, recommended ≤10MB).
-  - Response (2xx): { findings: Array<...>, markers: Array<...>, debug?: { model: string, provider: string } }
-  - Error (non-2xx): { error: string } with a human-friendly diagnostic (e.g. "Cannot reach Ollama at http://localhost:11434", "Model gemma3:latest not found", "Ollama returned malformed response: <short excerpt>" )
+  - Request: FormData with `file` (image). Recommended max size: 10MB.
+  - 200 success: { findings: Array, markers?: Array, debug?: { provider: string, model?: string } }
+  - non-2xx error: { error: string } — human-friendly message such as "Cannot reach Ollama at http://localhost:11434" or "Model gemma3:latest not found".
 
 - POST /api/redesign
-  - Request: screenshot + findings JSON (optional)
-  - Response (2xx): { html: string (sanitized), css?: string, metadata: { model, provider } }
-  - Error (non-2xx): { error: string }
+  - Request: FormData with `file` and optional `findings` JSON (stringified).
+  - 200 success: { html: string (sanitized), css?: string, metadata: { provider: string, model?: string } }
+  - non-2xx error: { error: string }
 
 - GET /api/status
-  - Response: { provider: 'ollama'|'openai'|null, ollamaBaseUrl?: string, reachable?: boolean, modelAvailable?: boolean, modelName?: string, modelError?: string }
-  - Note: This is safe to call from the client; it never echoes secrets.
+  - 200 success: { provider: string | null, ollamaBaseUrl?: string, reachable?: boolean, modelAvailable?: boolean, modelName?: string, modelError?: string }
+  - Safe to call from the browser; contains no API keys or secrets.
 
-Ollama & Codespaces developer setup (exact steps to run in your Codespace)
-1) Verify Ollama is installed in the Codespace container and the model is available locally:
-   - ollama status
-   - ollama list (or ollama tags)
-   - ollama pull gemma3 (or the specific model name you plan to use, e.g. gemma3:latest)
-   Note: Some Ollama versions require explicit model tags like gemma3:latest. If you configure AI_VISION_MODEL=gemma3, the server will attempt to resolve tags and will include the exact resolved tag in /api/status output.
+Errors surfaced and user-facing messages
+- Cannot reach Ollama: "Cannot reach Ollama at http://localhost:11434"
+- Model not found: "Model gemma3:latest not found. Run 'ollama pull gemma3' or update AI_VISION_MODEL to an installed tag."
+- Malformed response from Ollama: "Unexpected response shape from Ollama: (short excerpt)"
+- Oversized image: "Uploaded image exceeds max allowed size (10MB)."
+- Provider misconfiguration: "AI_PROVIDER is not configured. Set AI_PROVIDER=ollama or set OPENAI_API_KEY for OpenAI."
+- In all cases the UI displays the exact server error string returned by the API (no fake/mocked responses).
 
-2) Environment variables (set these in your Codespace environment or Secrets panel):
+Testing performed here (what I could do in this assistant environment)
+- Inspected all relevant source files and applied minimal, targeted code changes described above.
+- Verified TypeScript types by static inspection and corrected obvious type mismatches.
+- Could not run npm scripts, start the Next.js server, or contact an Ollama instance from this environment. No runtime calls to Ollama were made here.
+
+Exact developer verification steps (run in GitHub Codespace or local machine where Ollama is installed)
+Note: Ollama must be reachable from the same environment that runs the Next.js server (localhost inside the Codespace or container).
+
+1) Prepare Ollama in your Codespace
+   - Open a terminal in your Codespace.
+   - Run: ollama status
+   - Run: ollama list   # shows installed models and tags
+   - If the vision model is missing, run: ollama pull gemma3
+   - Confirm the model shows up as `gemma3:latest` or the exact tag shown by ollama list.
+
+2) Set environment variables (do not commit secrets)
    - AI_PROVIDER=ollama
-   - AI_VISION_MODEL=gemma3
+   - AI_VISION_MODEL=gemma3 or gemma3:latest (match ollama list output)
    - OLLAMA_BASE_URL=http://localhost:11434
-   Do NOT set OPENAI_API_KEY if you intend to use only Ollama.
-   See .env.example for all variables used (no secret values included there).
+   - (If you instead want OpenAI: AI_PROVIDER=openai and OPENAI_API_KEY must be set.)
 
-3) Install and run the app inside the Codespace:
+3) Install & run the app
    - npm install
-   - npm run typecheck  # optional but recommended
-   - npm run lint       # optional
+   - npm run typecheck    # optional
+   - npm run lint         # optional
    - npm run dev
 
-4) Functional test in the browser (Codespace forwarded port)
-   - Open the app (the preview URL provided by Codespaces / Vite / Next preview).
-   - Upload a PNG/JPG screenshot (<=10MB). Click Analyze.
-     * If Ollama is reachable and the model is available, you should receive findings and markers.
-     * If Ollama is unreachable, the UI will show the server-provided error message from /api/analyze (e.g. "Could not connect to Ollama at http://localhost:11434").
-   - Click Generate Redesign; the /api/redesign route should return sanitized HTML/CSS and the app will render it in a sandboxed iframe.
+4) Quick HTTP checks (from the same Codespace environment)
+   - curl -sS http://localhost:3000/api/status | jq
+     - expected fields: provider, reachable=true, modelAvailable=true (if model installed)
+   - If reachable=false, re-check OLLAMA_BASE_URL and if Ollama is running.
 
-Troubleshooting tips and what to capture if things fail
-- If analysis or redesign returns HTTP 500 or an error, open the Codespace terminal where Next is running and copy the server logs for the failing route. Share the logs (especially any returned Ollama /api/chat body) for me to analyze further.
-- If /api/status shows reachable=false or modelAvailable=false, run ollama list / ollama tags and verify the exact model tag. If the model is named gemma3:latest in Ollama, set AI_VISION_MODEL=gemma3:latest.
-- If you see "malformed response" errors, paste the small excerpt the server includes (it returns only short excerpts to avoid leaking large content).
-- If uploads are rejected: check the client console and server logs for "oversized image" messages. The server validates size.
+5) Manual UI test in the preview browser
+   - Open the app preview.
+   - Upload a PNG/JPEG screenshot (<=10MB). Click Analyze.
+     - On success: Findings panel populates with findings and markers.
+     - On failure: UI shows the exact API error message returned (e.g. cannot reach Ollama).
+   - Click Generate Redesign to get sanitized HTML/CSS preview.
+   - Verify the before/after comparison slider and that the sandboxed iframe renders the redesign.
 
-Exact git commands to create the review branch locally and push (I could not push from here)
+Important notes about Codespaces & localhost
+- In GitHub Codespaces, services exposed on the Codespace are reachable at localhost from processes inside the Codespace. Ensure you run ollama inside the same Codespace (not on your laptop) or forward ports appropriately.
+- Some Ollama versions return model tags (like `gemma3:latest`). The code resolves short names like `gemma3` to an available tag by checking /api/tags on the running Ollama instance.
+
+Next steps for the maintainer / reviewer
+1) Pull the branch with the fixes (branch name: fix/ollama-payload). I could not push from this environment — run these commands in your Codespace:
+   - git checkout -b fix/ollama-payload
+   - git add .
+   - git commit -m "fix(ollama): robust response parsing, provider diagnostics, and UI input validation"
+   - git push origin fix/ollama-payload
+   - Open a PR from fix/ollama-payload -> main in your git host UI.
+
+2) Validate in Codespace
+   - Follow the verification steps above. If /api/status shows reachable=false or modelAvailable=false, capture the JSON and server logs and attach to the PR.
+
+3) If you see "Unexpected response shape from Ollama", paste the short, scrubbed excerpt from the response into an issue — it helps adjust tolerant parsing in lib/ollama.ts.
+
+What was not done here
+- I did not run the app, start the Next.js dev server, or call the Ollama service from this assistant environment. Runtime verification must be performed in your Codespace.
+- No secrets or keys were added to the repository. Use the Codespace secrets panel or environment variables.
+
+How to report back for another iteration
+- If you follow the verification steps and still see failures, attach the output of GET /api/status and a single failing API response body (server logs). I will iterate on lib/ollama.ts parsing and lib/ai.ts provider checks.
+
+Appendix — quick file pointers
+- API routes: app/api/analyze/route.ts, app/api/redesign/route.ts, app/api/status/route.ts
+- AI layer: lib/ai.ts, lib/ollama.ts, lib/redesign.ts
+- UI: components/AnalysisResultPanel.tsx, components/RedesignPanel.tsx, components/SafeHtmlPreview.tsx
+
+End of document.
+
+One-line purpose
+- Interface Doctor AI analyzes UI screenshots and produces prioritized accessibility/usability findings plus an AI-generated responsive HTML/CSS redesign. The app is a Next.js + TypeScript project with pluggable AI providers (Ollama and OpenAI).
+
+Scope of this document
+- Concise reference describing: purpose, architecture, Phase 1–4 status, confirmed root causes and fixes from Phase 4, exact files changed, how to verify in GitHub Codespaces (Ollama environment), and the next steps. No secrets are included.
+
+Architecture (high level)
+- Frontend: Next.js App Router (app/), TypeScript, Tailwind CSS. Components live in components/*.tsx.
+- Server/API: Next.js route handlers in app/api/* (analyze, redesign, status). They validate input, call an AI provider, sanitize AI HTML/CSS, and return structured JSON to the client.
+- AI provider layer: lib/ai.ts (provider selection & runtime checks) and lib/ollama.ts (Ollama client/response handling). lib/redesign.ts composes prompts and post-processes the returned HTML/CSS.
+- Security: Generated HTML/CSS is sanitized server-side and rendered inside a sandboxed iframe (SafeHtmlPreview) with a restrictive CSP. No secrets are sent to the browser.
+
+Phase status (Phases 1–4)
+- Phase 1–3: UI, upload flows, OpenAI support, provider abstraction and initial Ollama integration implemented.
+- Phase 4: Addressed the runtime failures preventing analysis and redesign from completing. The fixes were minimal and focused on robustness and diagnostics.
+
+Root causes discovered in Phase 4
+1) Ollama HTTP 500 during analysis
+   - Symptom: /api/analyze returned a 500 and the UI showed "Analysis request could not be sent".
+   - Root cause: brittle response parsing in lib/ollama.ts and a duplicate variable name in the same scope (two different variables named `payload`) which sometimes shadowed the actual response. When Ollama returned a slightly different response shape the code referenced undefined and threw, bubbling as a 500.
+   - Fix: lib/ollama.ts parsing made tolerant to common shapes and the duplicate variable was renamed (payload -> result) to avoid collisions. Parsing now tries multiple fields (choices[0].message, output, text, result) and returns a clear, safe error when the response is malformed.
+
+2) Redesign incorrectly reported "AI provider not configured"
+   - Symptom: /api/redesign returned an error claiming the AI provider was unconfigured even when AI_PROVIDER=ollama.
+   - Root cause: provider checks in lib/ai.ts used OpenAI-centric validation and required OPENAI_API_KEY in some codepaths even if Ollama was selected.
+   - Fix: provider selection logic clarified so Ollama doesn't require OpenAI keys. getAiRuntimeStatus performs lightweight, provider-aware checks: it pings OLLAMA_BASE_URL (if provider=ollama) and attempts to resolve model names/tags (e.g. gemma3 -> gemma3:latest) before calling the model.
+
+3) Client crashes and React warning in AnalysisResultPanel
+   - Symptom: AnalysisResultPanel crashed at a .join() call and React warned about updating a component during render.
+   - Root cause: UI assumed some array fields (e.g. findings array, tags, or similar) were always present and called .join() on undefined. Also a state setter ran during render (side-effect in render path) causing React warning.
+   - Fix: components/AnalysisResultPanel.tsx made defensive: check for arrays before using .join(), use sensible defaults, and move side-effects into useEffect or event handlers so no state update happens during render.
+
+Files changed (Phase 4 fixes — minimal, focused)
+- lib/ollama.ts — tolerant response parsing; fixed duplicate variable naming; clearer structured errors
+- lib/ai.ts — provider selection and runtime diagnostics; Ollama-specific model resolution
+- lib/redesign.ts — unified provider usage, validation of inputs passed to redesign
+- app/api/analyze/route.ts — validation and structured error returns; clearer diagnostics
+- app/api/redesign/route.ts — validated AI outputs before returning sanitized HTML
+- app/api/status/route.ts — returns safe provider diagnostics for browser consumption
+- components/AnalysisResultPanel.tsx — defensive checks around .join and moved side-effects out of render
+- components/RedesignPanel.tsx — response-shape validation and error display controls
+
+What the server now returns (API contracts)
+- POST /api/analyze
+  - Request: FormData with file (screenshot). Max recommended size: 10MB.
+  - Success 200: { findings: Array, markers?: Array, debug?: { provider: string, model?: string } }
+  - Error non-2xx: { error: string } — contains a human-friendly message such as "Cannot reach Ollama at http://localhost:11434" or "Model gemma3:latest not found".
+
+- POST /api/redesign
+  - Request: FormData with file and optional findings JSON.
+  - Success 200: { html: string (sanitized), css?: string, metadata: { provider: string, model?: string } }
+  - Error non-2xx: { error: string }
+
+- GET /api/status
+  - Success 200: { provider: string | null, ollamaBaseUrl?: string, reachable?: boolean, modelAvailable?: boolean, modelName?: string, modelError?: string }
+  - The endpoint is safe to call from the browser and will not return secrets.
+
+Diagnostics & error messages (what you will see)
+- Connection failure to Ollama: "Cannot reach Ollama at http://localhost:11434"
+- Model missing: "Model gemma3:latest not found. Run 'ollama pull gemma3' or update AI_VISION_MODEL to an installed tag."
+- Malformed response from Ollama: "Unexpected response shape from Ollama: (short excerpt)."
+- Oversized image: "Uploaded image exceeds max allowed size (10MB)."
+- Provider misconfiguration (e.g. AI_PROVIDER unset): "AI_PROVIDER is not configured. Set AI_PROVIDER=ollama or OPENAI_API_KEY=..."
+
+Developer verification steps (Codespaces recommended)
+Note: I could not run Ollama or start the app from this assistant environment. The steps below must be executed inside your GitHub Codespace or local environment where Ollama is installed and reachable from the Next.js server.
+
+1) Ensure Ollama & model availability inside Codespaces
+   - In your Codespace terminal:
+     - ollama status
+     - ollama list   # shows installed models and tags
+     - ollama pull gemma3   # if the model is missing
+   - If ollama list shows gemma3:latest (or gemma3 with a tag), use that exact tag in AI_VISION_MODEL. Some Ollama versions require the explicit tag (gemma3:latest).
+
+2) Environment variables (do NOT commit secrets)
+   - Set these in Codespaces environment or .env via the Secrets panel (do not commit .env):
+     - AI_PROVIDER=ollama
+     - AI_VISION_MODEL=gemma3      # or gemma3:latest depending on ollama list output
+     - OLLAMA_BASE_URL=http://localhost:11434
+   - If you want OpenAI instead, set AI_PROVIDER=openai and OPENAI_API_KEY in your Codespace.
+
+3) Install and run the app
+   - npm install
+   - npm run typecheck   # optional
+   - npm run lint        # optional
+   - npm run dev
+
+4) Quick HTTP checks
+   - From Codespace terminal (same environment as the running Next.js server):
+     - curl -sS http://localhost:3000/api/status | jq
+       * This will show provider, reachable, and model availability.
+     - If reachable=false, re-check OLLAMA_BASE_URL and whether Ollama is running in the same container.
+
+5) Manual UI test (browser preview or forwarded port)
+   - Open the app in the browser preview.
+   - Upload a PNG/JPEG screenshot (<=10MB). Click Analyze.
+     - If successful, the Findings panel populates and shows markers.
+     - If not, the server error message is shown exactly in the UI (no fake/mocked output).
+   - Click Generate Redesign. If successful, a sanitized HTML preview appears inside the sandboxed iframe.
+
+Exact git commands to prepare the review branch and open a PR (you must run these locally or in Codespaces)
 - git checkout -b fix/ollama-payload
 - git add .
-- git commit -m "fix(ollama): robust response parsing, diagnostics & Phase 4 runtime fixes"
+- git commit -m "fix(ollama): robust response parsing, provider diagnostics, and UI input validation"
 - git push origin fix/ollama-payload
-- Open a PR on GitHub from fix/ollama-payload into main and request review.
+- Open a Pull Request from fix/ollama-payload -> main in your git host UI.
 
-Suggested verification checklist to run in Codespaces (one-by-one)
-1) npm install
-2) npm run typecheck
-   - If type errors appear, copy and share them; I'll prepare a follow-up patch.
-3) npm run lint
-   - Fix minor lint issues if CI demands; they are non-blocking for functional testing.
-4) npm run dev
-5) Visit UI and run: Upload → Analyze → Generate Redesign
-6) If any API call fails, call GET /api/status and paste the JSON. The JSON will help pinpoint connectivity vs model vs parsing failures.
-
-Remaining work / open questions
-- I could not run the app or contact Ollama in this environment; therefore, the final runtime verification (that gemma3:latest returns usable vision completions for your prompt) must be executed by you in Codespaces where Ollama is installed.
-- If Ollama returns new/unknown response shapes that still cause parsing issues, capture a small sample response body (redact PII and large arrays) and I will update lib/ollama.ts to parse it.
-
-Safety & Secrets
-- No secrets were added to the repo. Never commit OPENAI_API_KEY or other secrets. Use the Codespace Secrets panel or process.env when running locally.
-- API route handlers are designed to return safe, concise error messages and not leak environment variables or uploaded image binaries in error responses.
-
-Contact & next steps
-- Run the verification checklist in Codespaces and share back any failing request logs or /api/status JSON. I will iterate quickly.
-- If you'd like, I can prepare a single `.patch` file for the changes in this branch to apply locally. Ask and I will generate it.
-
-Quick reference: key files to inspect
+Files to inspect during debugging (entry points)
 - app/api/analyze/route.ts
 - app/api/redesign/route.ts
 - app/api/status/route.ts
@@ -145,6 +254,19 @@ Quick reference: key files to inspect
 - lib/redesign.ts
 - components/AnalysisResultPanel.tsx
 - components/RedesignPanel.tsx
+- components/SafeHtmlPreview.tsx
 
-Acknowledgements
-- This patch focused on minimal, targeted fixes to unblock Ollama-based analysis/redesign flows and improve error diagnostics. The runtime verification step must be performed in your Codespace where Ollama and the target vision model are installed.
+What was NOT done here
+- I did not run the app or call the Ollama service from this assistant environment. The fixes are code changes that must be validated in your Codespace.
+- I did not add any secrets to the repo. Use the workspace Secrets/Environment panel for keys.
+- No database or persistent storage changes were made; in-memory data resets on server restart.
+
+If tests still fail in Codespaces
+- Copy the JSON response from GET /api/status and paste it into an issue comment.
+- For failing /api/analyze or /api/redesign calls, capture the server log and the short "malformed response" excerpt the server returns (it is scrubbed and will not contain secrets).
+- Share the exact ollama list output if a model name mismatch appears.
+
+Contact & next steps
+- Run the verification steps in a Codespace with Ollama installed and paste /api/status and any failing server logs if issues persist. I will iterate on lib/ollama.ts parsing or provider checks if additional Ollama response shapes are observed.
+
+End of document.
