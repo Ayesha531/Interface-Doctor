@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { callOllamaChat, getOllamaBaseUrl } from "@/lib/ollama";
+import { callOllamaChat, getOllamaBaseUrl, checkOllamaModelAvailability } from "@/lib/ollama";
 import { extractJsonContent } from "@/lib/jsonExtraction";
 import {
   CATEGORY_LABELS,
@@ -15,6 +15,7 @@ import {
   type AnalysisFinding,
   type FindingCategory,
   type Severity,
+  type AiStatusResponse,
 } from "@/lib/types";
 
 export interface AiConfig {
@@ -25,12 +26,10 @@ export interface AiConfig {
   apiKey?: string;
 }
 
-export function getAiRuntimeStatus(): AiStatusResponse {
+export async function getAiRuntimeStatus(): Promise<AiStatusResponse> {
   const provider = (process.env.AI_PROVIDER || "ollama").trim().toLowerCase();
   const model = (process.env.AI_VISION_MODEL || "gemma3").trim();
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-
-  const supportedProvider = provider === "ollama" || provider === "openai";
+  const apiKey = process.env.OPENAI_API_KEY?.trim() || "";
 
   const variablesChecked = [
     "AI_PROVIDER",
@@ -39,9 +38,25 @@ export function getAiRuntimeStatus(): AiStatusResponse {
     "OLLAMA_BASE_URL",
   ];
 
-  // Ensure Ollama does not require OPENAI_API_KEY to be considered configured.
+  const diagnostics: AiStatusResponse["diagnostics"] = { runtime: "nodejs", variablesChecked };
+
+  // Provider support
+  const supportedProvider = provider === "ollama" || provider === "openai";
+
+  // If Ollama is selected, include lightweight diagnostics: base URL and model check.
   if (provider === "ollama") {
-    // no-op: Ollama does not require API keys; keep keyPresent true to reflect readiness.
+    diagnostics.ollamaBaseUrl = getOllamaBaseUrl();
+    try {
+      const check = await checkOllamaModelAvailability(diagnostics.ollamaBaseUrl, model);
+      diagnostics.ollamaReachable = check.available;
+      diagnostics.modelInstalled = !!check.modelName;
+      diagnostics.modelName = check.modelName;
+      if (!check.available && check.error) diagnostics.modelError = check.error;
+    } catch (e) {
+      diagnostics.ollamaReachable = false;
+      diagnostics.modelInstalled = false;
+      diagnostics.modelError = e instanceof Error ? e.message : String(e);
+    }
   }
 
   if (!supportedProvider) {
@@ -53,10 +68,8 @@ export function getAiRuntimeStatus(): AiStatusResponse {
       supportedProvider: false,
       status: "provider_unsupported",
       missing: ["AI_PROVIDER"],
-      message:
-        `Provider '${provider}' is not supported. ` +
-        "Set AI_PROVIDER=ollama or AI_PROVIDER=openai.",
-      diagnostics: { runtime: "nodejs", variablesChecked },
+      message: `Provider '${provider}' is not supported. Set AI_PROVIDER=ollama or AI_PROVIDER=openai.`,
+      diagnostics,
     };
   }
 
@@ -70,9 +83,8 @@ export function getAiRuntimeStatus(): AiStatusResponse {
       status: "key_missing",
       missing: ["OPENAI_API_KEY"],
       message:
-        "OPENAI_API_KEY is required when using OpenAI. " +
-        "For local inference without an API key, use Ollama.",
-      diagnostics: { runtime: "nodejs", variablesChecked },
+        "OPENAI_API_KEY is required when using OpenAI. For local inference without an API key, use Ollama.",
+      diagnostics,
     };
   }
 
@@ -84,16 +96,13 @@ export function getAiRuntimeStatus(): AiStatusResponse {
     supportedProvider: true,
     status: "ready",
     missing: [],
-    message:
-      provider === "ollama"
-        ? "Ollama AI engine configured."
-        : "OpenAI AI engine configured.",
-    diagnostics: { runtime: "nodejs", variablesChecked },
+    message: provider === "ollama" ? "Ollama AI engine configured." : "OpenAI AI engine configured.",
+    diagnostics,
   };
 }
 
-export function getAiConfig(): AiConfig {
-  const runtime = getAiRuntimeStatus();
+export async function getAiConfig(): Promise<AiConfig> {
+  const runtime = await getAiRuntimeStatus();
 
   return {
     configured: runtime.configured,

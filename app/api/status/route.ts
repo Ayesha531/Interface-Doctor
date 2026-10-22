@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
  * Secret values are never exposed.
  */
 export async function GET(): Promise<NextResponse<AiStatusResponse>> {
-  const status = getAiRuntimeStatus();
+  const status = await getAiRuntimeStatus();
 
   if (status.provider === "ollama") {
     const baseUrl = getOllamaBaseUrl();

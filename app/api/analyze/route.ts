@@ -10,7 +10,7 @@ const ALLOWED_MIME = new Set(["image/png", "image/jpeg"]);
 
 /** GET /api/analyze — report whether a vision AI provider is configured. */
 export async function GET(): Promise<NextResponse<AiStatusResponse>> {
-  const status = getAiRuntimeStatus();
+  const status = await getAiRuntimeStatus();
   return NextResponse.json(status, {
     headers: {
       "Cache-Control": "no-store, max-age=0",
@@ -53,7 +53,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeResult
     );
   }
 
-  const runtimeStatus = getAiRuntimeStatus();
+  const runtimeStatus = await getAiRuntimeStatus();
   if (!runtimeStatus.configured) {
     return NextResponse.json(
       {
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<AnalyzeResult
     );
   }
 
-  const config = getAiConfig();
+  const config = await getAiConfig();
 
   try {
     const findings = await runVisionDiagnosis(image, config);

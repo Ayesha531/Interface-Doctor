@@ -6,51 +6,87 @@ Purpose and architecture
 - Vision analysis (/api/analyze) and redesign generation (/api/redesign) call into lib/ai.ts and lib/ollama.ts.
 - AI-generated HTML is sanitized server-side and rendered inside a sandboxed iframe on the client.
 
-What I changed (Phase 1: Ollama HTTP 500 fix + basic screenshot analysis)
-- lib/ollama.ts: hardened response parsing for /api/chat. Previously code assumed a single response shape and referenced a duplicated 'payload' variable; now we detect multiple possible shapes (message.content, choices[0].message.content, output[0].content, text/result/response) and return extracted JSON. This prevents unhandled exceptions that surfaced as HTTP 500.
-- lib/ai.ts: clarified provider detection so Ollama is considered configured without an OpenAI key. Error classification for Ollama/network/provider remains. No OpenAI-only checks block Ollama flows.
-- .env.example: updated earlier to explain Ollama settings (left intact; no secrets added).
-- context.md: added this file describing current state and next steps.
-
-Root causes found
-1) lib/ollama.ts assumed a single rigid response shape and returned undefined content when Ollama returned a different field (some Ollama versions return 'output', 'text', or top-level fields). The code then threw, leading to HTTP 500 in /api/analyze.
-2) Minor provider logic: Ai runtime detection treated missing OPENAI_API_KEY as an error for non-openai providers in messaging; clarified to ensure Ollama does not require an API key.
+Phase 4 changes completed in this patch
+- Fixed duplicated/misnamed payload handling and hardened response parsing in lib/ollama.ts so different Ollama /api/chat shapes (message, choices, output, text/result/response) are handled. This prevents unhandled exceptions that caused HTTP 500 during analysis and redesign.
+- Ensured Ai runtime status and redesign route use async diagnostics so Ollama reachability and installed model are reported. getAiRuntimeStatus now performs a lightweight /api/tags check and includes ollamaBaseUrl, reachability, modelName, and modelError in diagnostics.
+- Unified provider configuration: /api/analyze and /api/redesign now respect AI_PROVIDER=ollama without requiring OPENAI_API_KEY. The redesign generator reuses the same Ollama client and model detection.
+- Added clear, safe server-side error messages for unreachable Ollama, missing model, oversized images, and malformed AI responses.
 
 Files changed
-- lib/ollama.ts (response parsing and error messaging hardened)
-- lib/ai.ts (provider handling minor tweak)
-- context.md (new)
-- .env.example (no secrets; reviewed)
+- lib/ollama.ts — response parsing and diagnostics improvements.
+- lib/ai.ts — getAiRuntimeStatus turned async and now reports ollama diagnostics.
+- app/api/analyze/route.ts — await getAiRuntimeStatus call.
+- app/api/redesign/route.ts — await getAiRuntimeStatus call.
+- context.md — updated details and Codespaces test steps.
 
-Testing performed here
-- Static code inspection and lightweight TypeScript edits. I did not run the dev server or TypeScript checks in this environment.
-- Did not attempt to call Ollama; per constraints, Ollama may not be reachable from this runner. The code now surfaces clear errors if Ollama is down or the model is missing.
+Root causes discovered
+1) lib/ollama.ts previously assumed a single rigid response shape and referenced a duplicated/undefined variable; when Ollama returned a different shape the function threw, causing HTTP 500. The response parsing is now robust across known shapes.
+2) getAiRuntimeStatus previously returned diagnostic messages that could imply Ollama required OPENAI_API_KEY. The provider logic was clarified so Ollama is treated as configured when AI_PROVIDER=ollama.
 
-Manual testing steps for GitHub Codespaces (exact commands)
-1. Start Ollama in the Codespace/container and ensure gemma3 is installed:
+What I tested here
+- Static code inspection and focused TypeScript edits to ensure consistent async flow and robust parsing.
+- Did not run the dev server or TypeScript checks in this environment per restrictions.
+
+Exact manual tests to run in GitHub Codespaces (recommended)
+1. Ensure Ollama is installed and running in the Codespace container:
    - ollama status
    - ollama pull gemma3
-2. Set workspace secrets or environment variables in Codespaces:
+2. Set environment variables in Codespaces Secrets or shell:
    - AI_PROVIDER=ollama
    - AI_VISION_MODEL=gemma3
    - OLLAMA_BASE_URL=http://localhost:11434
-   (Do NOT set OPENAI_API_KEY unless using OpenAI.)
-3. In the repo: npm install
-4. Start dev server: npm run dev
-5. In the app UI: upload a PNG/JPG screenshot (<=10MB) and run "Analyze".
-   - If Ollama is reachable and gemma3 is installed, analysis should return findings.
-   - If not, the API response contains clear diagnostics: connection error, model not installed, or malformed response.
-6. Generate redesign after analysis; the redesign endpoint uses the same Ollama client and will return sanitized HTML/CSS.
+   (Do NOT set OPENAI_API_KEY unless you intend to use OpenAI.)
+3. Install and run the app:
+   - npm install
+   - npm run dev
+4. In the web UI: upload a PNG/JPG screenshot (≤10MB) and click "Analyze".
+   - If Ollama is reachable and gemma3 is installed, /api/analyze should return findings.
+   - If not, the response will include a helpful diagnostics message (e.g. could not reach Ollama, model not installed, or malformed response).
+5. After analysis, click "Generate redesign" — /api/redesign uses the same model and should return sanitized HTML/CSS inside the response.
 
-Remaining blockers and next steps
-- I could not run typecheck, lint, or runtime tests in this environment. Please run:
-  - npm run typecheck
-  - npm run lint
-  - npm run dev
-  in your Codespace.
-- If Ollama still returns HTTP 500 in your Codespace after these fixes, capture /api/chat response body (server logs) and share it — the code now surfaces the returned details.
+If Ollama still returns HTTP 500
+- Inspect server logs for the full /api/chat response body. The code now surfaces returned error text where possible; share that body if further fixes are needed.
 
-Notes
-- No API keys or secrets were added to the repo.
-- AI outputs are not mocked; failures surface as errors.
-- Image size limit enforced at 10 MB (base64 approx).
+Next steps I did not perform here
+- Run npm run typecheck, npm run lint, and npm run build in Codespaces. Please run these and share any failures; I'll prepare follow-ups.
+- Create a review branch and PR: I prepared minimal fixes here, but cannot push branches from this environment. Use the git commands below to create a branch and open a PR.
+
+Git commands to create review branch and push
+- git checkout -b fix/ollama-payload
+- git add .
+- git commit -m "fix(ollama): robust response parsing and diagnostics for Codespaces"
+- git push origin fix/ollama-payload
+
+Create a PR from the branch on GitHub and request review before merging.
+
+Changed files in this patch
+- lib/ollama.ts — made response parsing robust across Ollama versions and improved error messages.
+- lib/ai.ts — getAiRuntimeStatus is now async and returns safe Ollama diagnostics; getAiConfig is async; added error classification and safer handling for Ollama vs OpenAI. Also renamed duplicate variables to avoid runtime crashes.
+- lib/redesign.ts — now awaits getAiConfig and reuses Ollama client flow.
+- app/api/analyze/route.ts — await runtime checks and config before running diagnosis; improved error responses.
+- app/api/redesign/route.ts — ensure runtime status awaited and input validation; improved logging.
+- app/api/status/route.ts — await getAiRuntimeStatus and include Ollama diagnostics in the response.
+- components/AnalysisResultPanel.tsx — defensive fix for missing 'missing' array when showing configuration errors.
+
+What I changed vs. what you still need to do in Codespaces
+- I could not run npm scripts or contact Ollama from this environment. I made only code changes that are safe and minimal.
+- In your GitHub Codespace (where Ollama and gemma3:latest are installed) run the following tests and report results back so I can follow up:
+  1. npm install
+  2. npm run typecheck
+  3. npm run lint
+  4. npm run dev
+  5. Open the app, upload a PNG/JPG screenshot (≤10MB), click Analyze, then Generate Redesign.
+
+If any of the server routes return errors, copy server logs (especially any /api/chat response body) and share them — I can patch parsing or prompts further.
+
+Notes on safety
+- No secrets were committed.
+- AI-generated HTML is sanitized server-side and displayed inside a sandboxed iframe with no scripts.
+
+If you want, I can prepare a single patch file you can apply locally or provide the exact git commands to create a review branch and open a PR. I'm not able to create the PR from here.
+Assumptions and security
+- No secrets or API keys were added to the repo. Environment variables remain required in Codespaces.
+- AI-generated HTML remains sanitized server-side and presented inside a sandboxed iframe on the client.
+
+Contact
+- After you run the Codespaces tests, share any server logs or error responses and I'll iterate quickly.

@@ -100,9 +100,7 @@ export function AnalysisResultPanel({
             <p className="mt-1 text-sm leading-relaxed text-amber-800/90">{result.message}</p>
             <p className="mt-2 text-xs text-amber-700">
               Required:{" "}
-              <code className="rounded bg-amber-100 px-1.5 py-0.5 font-mono">
-                {result.missing.join(", ")}
-              </code>
+              <code className="rounded bg-amber-100 px-1.5 py-0.5 font-mono">{(result.missing ?? []).join(", ")}</code>
             </p>
           </div>
         </div>

@@ -56,7 +56,7 @@ export async function POST(req: NextRequest): Promise<NextResponse<RedesignResul
   const width = typeof originalWidth === "number" ? originalWidth : 1200;
   const height = typeof originalHeight === "number" ? originalHeight : 800;
 
-  const runtimeStatus = getAiRuntimeStatus();
+  const runtimeStatus = await getAiRuntimeStatus();
   if (!runtimeStatus.configured) {
     return NextResponse.json(
       {

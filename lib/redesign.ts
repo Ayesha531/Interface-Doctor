@@ -55,14 +55,14 @@ function buildUserPrompt(options: RedesignOptions): string {
 export async function runRedesignGeneration(
   options: RedesignOptions,
 ): Promise<RedesignPayload> {
-  const runtimeStatus = getAiRuntimeStatus();
+  const runtimeStatus = await getAiRuntimeStatus();
   if (!runtimeStatus.configured) {
     throw new Error(
       `AI provider is not configured. ${runtimeStatus.message}`,
     );
   }
 
-  const config = getAiConfig();
+  const config = await getAiConfig();
   if (config.provider === "openai" && !config.apiKey) {
     throw new Error("OPENAI_API_KEY is required when using OpenAI.");
   }

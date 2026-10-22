@@ -214,7 +214,7 @@ export async function callOllamaChat(
     );
   }
 
-  const body = await response.json().catch(() => null);
+  const result = await response.json().catch(() => null);
 
   // Ollama /api/chat responses vary between versions. Try several known
   // shapes to find textual content: message.content, choices[0].message.content,
@@ -223,26 +223,26 @@ export async function callOllamaChat(
   let rawContent: string | undefined;
 
   try {
-    if (!body) rawContent = undefined;
-    else if (typeof body === "string") rawContent = body;
-    else if (typeof body === "object") {
+    if (!result) rawContent = undefined;
+    else if (typeof result === "string") rawContent = result;
+    else if (typeof result === "object") {
       // message.content
       // @ts-ignore
-      rawContent = body?.message?.content ?? rawContent;
+      rawContent = result?.message?.content ?? rawContent;
       // choices[0].message.content
       // @ts-ignore
-      rawContent = rawContent ?? body?.choices?.[0]?.message?.content;
+      rawContent = rawContent ?? result?.choices?.[0]?.message?.content;
       // output array common in some builds
       // @ts-ignore
-      rawContent = rawContent ?? body?.output?.[0]?.content;
+      rawContent = rawContent ?? result?.output?.[0]?.content;
       // some builds return text
       // @ts-ignore
-      rawContent = rawContent ?? body?.text ?? body?.result ?? body?.response;
-      // if body.output is array of strings
+      rawContent = rawContent ?? result?.text ?? result?.result ?? result?.response;
+      // if result.output is array of strings
       // @ts-ignore
-      if (!rawContent && Array.isArray(body.output) && typeof body.output[0] === "string") {
+      if (!rawContent && Array.isArray(result.output) && typeof result.output[0] === "string") {
         // @ts-ignore
-        rawContent = body.output[0];
+        rawContent = result.output[0];
       }
     }
   } catch (e) {

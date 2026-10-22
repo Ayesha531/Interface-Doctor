@@ -108,7 +108,7 @@ export function RedesignPanel({
         <p className="mt-2 text-xs text-amber-700">
           Required:{" "}
           <code className="rounded bg-amber-100 px-1.5 py-0.5 font-mono">
-            {redesignResult.missing.join(", ")}
+            {(redesignResult.missing ?? []).join(", ") }
           </code>
         </p>
       </div>
