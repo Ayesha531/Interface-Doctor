@@ -39,6 +39,11 @@ export function getAiRuntimeStatus(): AiStatusResponse {
     "OLLAMA_BASE_URL",
   ];
 
+  // Ensure Ollama does not require OPENAI_API_KEY to be considered configured.
+  if (provider === "ollama") {
+    // no-op: Ollama does not require API keys; keep keyPresent true to reflect readiness.
+  }
+
   if (!supportedProvider) {
     return {
       configured: false,

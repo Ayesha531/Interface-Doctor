@@ -142,7 +142,7 @@ webpage preview based on the screenshot and the diagnosed issues.
 draggable slider so you can compare them interactively.
 
 If no AI key is configured, the UI clearly explains that redesign generation requires
-configuration — no fabricated previews are shown.
+configuration — no fabricated previews are shown. For Ollama, no OPENAI_API_KEY is required; ensure OLLAMA_BASE_URL and AI_VISION_MODEL are set and the model is pulled.
 
 ## Data persistence
 

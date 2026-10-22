@@ -214,13 +214,43 @@ export async function callOllamaChat(
     );
   }
 
-  const result = (await response.json()) as {
-    message?: { content?: string };
-  };
+  const body = await response.json().catch(() => null);
 
-  const rawContent = result.message?.content;
-  if (!rawContent) {
-    throw new Error("Ollama returned an empty response message.");
+  // Ollama /api/chat responses vary between versions. Try several known
+  // shapes to find textual content: message.content, choices[0].message.content,
+  // output[0].content, or a top-level text field. Fall back to stringifying
+  // the body for diagnostics.
+  let rawContent: string | undefined;
+
+  try {
+    if (!body) rawContent = undefined;
+    else if (typeof body === "string") rawContent = body;
+    else if (typeof body === "object") {
+      // message.content
+      // @ts-ignore
+      rawContent = body?.message?.content ?? rawContent;
+      // choices[0].message.content
+      // @ts-ignore
+      rawContent = rawContent ?? body?.choices?.[0]?.message?.content;
+      // output array common in some builds
+      // @ts-ignore
+      rawContent = rawContent ?? body?.output?.[0]?.content;
+      // some builds return text
+      // @ts-ignore
+      rawContent = rawContent ?? body?.text ?? body?.result ?? body?.response;
+      // if body.output is array of strings
+      // @ts-ignore
+      if (!rawContent && Array.isArray(body.output) && typeof body.output[0] === "string") {
+        // @ts-ignore
+        rawContent = body.output[0];
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  if (!rawContent || typeof rawContent !== "string") {
+    throw new Error("Ollama returned an empty or unrecognized response.");
   }
 
   return extractJsonContent(rawContent);
