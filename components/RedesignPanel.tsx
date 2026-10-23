@@ -130,7 +130,10 @@ export function RedesignPanel({
   }
 
   const { redesign, provider, model } = redesignResult;
-  const aspectRatio = selection.width / selection.height;
+  const aspectRatio =
+    selection.width > 0 && selection.height > 0
+      ? selection.width / selection.height
+      : 4 / 3;
 
   const originalImage = (
     <img

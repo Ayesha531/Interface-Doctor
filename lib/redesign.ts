@@ -72,7 +72,7 @@ export async function runRedesignGeneration(options: RedesignOptions): Promise<R
         {
           role: "user",
           content: [
-            { type: "text", text: buildUserPrompt(options.findings) },
+            { type: "text", text: buildUserPrompt(options) },
             { type: "image_url", image_url: { url: options.imageDataUrl } },
           ],
         },
