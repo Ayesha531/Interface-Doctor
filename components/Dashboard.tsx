@@ -11,11 +11,14 @@ import { RedesignPanel } from "@/components/RedesignPanel";
 import { RecentProjects } from "@/components/RecentProjects";
 import { fileToSelection, loadSampleSelection, makeThumbnail } from "@/lib/imageUtils";
 import {
-  addRecentProject,
-  loadRecentProjects,
-  removeRecentProject,
-  type RecentProject,
-} from "@/lib/recentProjects";
+  createProject,
+  deleteProject,
+  listProjects,
+  loadProject,
+  updateProject,
+  type Project,
+  type StorageMode,
+} from "@/lib/projects";
 import type {
   AiStatusResponse,
   AnalysisFinding,
@@ -32,29 +35,42 @@ export function Dashboard() {
   const [result, setResult] = useState<AnalyzeResult | null>(null);
   const [activeFindingId, setActiveFindingId] = useState<string | null>(null);
   const [aiStatus, setAiStatus] = useState<AiStatusResponse | null>(null);
-  const [projects, setProjects] = useState<RecentProject[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [projectsStorage, setProjectsStorage] = useState<StorageMode | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [redesignResult, setRedesignResult] = useState<RedesignResult | null>(null);
   const [generatingRedesign, setGeneratingRedesign] = useState(false);
 
   useEffect(() => {
-    setProjects(loadRecentProjects());
     fetch("/api/status")
       .then((r) => (r.ok ? r.json() : null))
       .then((data: AiStatusResponse | null) => setAiStatus(data))
       .catch(() => setAiStatus(null));
+
+    setProjectsLoading(true);
+    listProjects()
+      .then((loaded) => {
+        setProjects(loaded);
+        setProjectsStorage(loaded[0]?.storage ?? "local_storage");
+      })
+      .catch(() => {
+        setProjects([]);
+        setProjectsStorage("local_storage");
+      })
+      .finally(() => setProjectsLoading(false));
   }, []);
 
   const registerProject = useCallback(async (sel: ScreenshotSelection) => {
     const thumbnail = await makeThumbnail(sel.previewUrl).catch(() => sel.previewUrl);
-    setProjects(
-      addRecentProject({
-        name: sel.name,
-        thumbnail,
-        width: sel.width,
-        height: sel.height,
-        source: sel.source,
-      }),
-    );
+    try {
+      const project = await createProject(sel, thumbnail);
+      setProjects((prev) => [project, ...prev].slice(0, 20));
+      setActiveProjectId(project.id);
+      setProjectsStorage(project.storage);
+    } catch {
+      // createProject already falls back to localStorage internally.
+    }
   }, []);
 
   const acceptSelection = useCallback(
@@ -110,6 +126,15 @@ export function Dashboard() {
       } else {
         setActiveFindingId(null);
       }
+      if (activeProjectId) {
+        void updateProject(activeProjectId, { findings: data }).then((updated) => {
+          if (updated) {
+            setProjects((prev) =>
+              prev.map((p) => (p.id === updated.id ? updated : p)),
+            );
+          }
+        });
+      }
     } catch {
       setResult({
         status: "error",
@@ -138,6 +163,15 @@ export function Dashboard() {
       });
       const data = (await res.json()) as RedesignResult;
       setRedesignResult(data);
+      if (activeProjectId) {
+        void updateProject(activeProjectId, { redesign: data }).then((updated) => {
+          if (updated) {
+            setProjects((prev) =>
+              prev.map((p) => (p.id === updated.id ? updated : p)),
+            );
+          }
+        });
+      }
     } catch {
       setRedesignResult({
         status: "error",
@@ -152,13 +186,47 @@ export function Dashboard() {
     setRedesignResult(null);
   }, []);
 
+  const handleLoadProject = useCallback(async (project: Project) => {
+    if (project.screenshot) {
+      setSelection(project.screenshot);
+      setResult(project.findings ?? null);
+      setRedesignResult(project.redesign ?? null);
+      setActiveProjectId(project.id);
+      setActiveFindingId(null);
+      setUploadError(null);
+      return;
+    }
+
+    const loaded = await loadProject(project.id);
+    if (loaded?.screenshot) {
+      setSelection(loaded.screenshot);
+      setResult(loaded.findings ?? null);
+      setRedesignResult(loaded.redesign ?? null);
+      setActiveProjectId(loaded.id);
+      setActiveFindingId(null);
+      setUploadError(null);
+    }
+  }, []);
+
   const clearSelection = useCallback(() => {
     setSelection(null);
     setResult(null);
     setActiveFindingId(null);
     setRedesignResult(null);
     setUploadError(null);
+    setActiveProjectId(null);
   }, []);
+
+  const handleRemoveProject = useCallback(
+    async (id: string, storage: StorageMode) => {
+      await deleteProject(id, storage);
+      setProjects((prev) => prev.filter((p) => p.id !== id));
+      if (activeProjectId === id) {
+        clearSelection();
+      }
+    },
+    [activeProjectId, clearSelection],
+  );
 
   return (
     <div id="top" className="min-h-screen">
@@ -279,7 +347,10 @@ export function Dashboard() {
 
           <RecentProjects
             projects={projects}
-            onRemove={(id) => setProjects(removeRecentProject(id))}
+            storage={projectsStorage}
+            loading={projectsLoading}
+            onLoad={handleLoadProject}
+            onRemove={handleRemoveProject}
           />
         </div>
       </main>
